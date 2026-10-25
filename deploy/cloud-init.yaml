@@ -1,0 +1,47 @@
+#cloud-config
+# Paste this into "Cloud-init script" when you create the Oracle VM (Ubuntu 24.04, Arm / A1). It runs once, on first boot.
+# It installs Docker and Tailscale, adds a 4 GB swap file and turns on automatic security updates.
+# It opens NO ports. Tailscale Serve and Funnel only make outbound connections.
+# After the VM is up, follow docs/HOSTING.md from step "Sign in to Tailscale".
+timezone: Asia/Kolkata
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - git
+  - unattended-upgrades
+
+write_files:
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+  - path: /etc/sysctl.d/99-rectifi.conf
+    permissions: "0644"
+    content: |
+      vm.swappiness=10
+
+runcmd:
+  # swap: a safety net so a busy moment does not kill a container
+  - [sh, -c, "test -f /swapfile || (fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile)"]
+  - [sh, -c, "swapon /swapfile || true"]
+  - [sh, -c, "grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab"]
+  - [sysctl, --system]
+  # Docker Engine and the compose plugin, from Docker's own apt repository
+  - [install, -m, "0755", -d, /etc/apt/keyrings]
+  - [curl, -fsSL, "https://download.docker.com/linux/ubuntu/gpg", -o, /etc/apt/keyrings/docker.asc]
+  - [sh, -c, "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable\" > /etc/apt/sources.list.d/docker.list"]
+  # Tailscale, from its own apt repository
+  - [sh, -c, ". /etc/os-release && curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg && curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list"]
+  - [apt-get, update]
+  - [apt-get, install, -y, docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin, tailscale]
+  - [systemctl, enable, --now, docker]
+  - [systemctl, enable, --now, tailscaled]
+  # the default login user may run docker without sudo (this is as powerful as root: fine on a one-person server)
+  - [sh, -c, "id ubuntu >/dev/null 2>&1 && usermod -aG docker ubuntu || true"]
+  - [mkdir, -p, /var/backups/rectifi]
+  - [sh, -c, "echo done > /var/lib/rectifi-cloud-init-done"]

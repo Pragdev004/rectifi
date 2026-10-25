@@ -1,0 +1,18 @@
+# Keep private and heavy things out of the image build.
+.git
+.gitignore
+.env
+.env.*
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+web/node_modules
+statements
+backups
+*.csv
+*.xlsx
+*.xls
+*.pdf
+!tests/fixtures/**
