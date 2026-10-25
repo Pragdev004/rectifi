@@ -394,3 +394,15 @@ def test_read_env_handles_quotes_and_comments(tmp_path):
 
 def test_devpy_lists_both_commands():
     assert set(deploy.COMMANDS) == {"set-password", "deploy-check"}
+
+
+def test_dev_py_delegates_to_these_commands():
+    """dev.py loads scripts/devtools/deploy.py by path; the help line and the command both reach it."""
+    dev = [__import__("sys").executable, str(ROOT / "scripts" / "dev.py")]
+    helped = subprocess.run(dev + ["--help"], capture_output=True, text=True)
+    assert "set-password" in helped.stdout and "deploy-check" in helped.stdout
+    checked = subprocess.run(dev + ["deploy-check", "--", "--env-file", "/nonexistent/.env.deploy"], capture_output=True, text=True)
+    assert checked.returncode == 1 and "Hosting files" in checked.stdout and "does not exist" in checked.stdout
+    direct = subprocess.run([__import__("sys").executable, str(ROOT / "scripts" / "devtools" / "deploy.py"), "deploy-check",
+                             "--env-file", "/nonexistent/.env.deploy"], capture_output=True, text=True)
+    assert direct.returncode == 1 and "does not exist" in direct.stdout
