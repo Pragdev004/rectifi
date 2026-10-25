@@ -96,7 +96,7 @@ ROUTE_PROMPT = ChatPromptTemplate.from_messages([
 # ───────────── deterministic pre-router ─────────────
 
 _PERSONAL = re.compile(r"(?i)\b(my|mine|i|i've|i'm|me|did i|have i)\b")
-_DATA = re.compile(r"(?i)\b(spen[dt]|spending|paid|earn(?:ed)?|income|saved|savings?|budgets?|transactions?|expenses?|balance|salary|"
+_DATA = re.compile(r"(?i)\b(spen[dt]|spending|paid|pay|paying|payments?|earn(?:ed)?|income|saved|savings?|budgets?|transactions?|expenses?|balance|salary|"
                    r"bought|purchases?|entries|insights?|commitment|last (?:week|month)|this (?:week|month))\b")
 _GENERAL = re.compile(r"(?i)\b(how (?:do|does|should|can|to|would)|what is|what's|what are|explain|why|tips?|guide|difference between|meaning of|should i)\b")
 _SMALL_TALK = re.compile(r"(?i)^\s*(hi|hello|hey|thanks|thank you|ok|okay|cool|great|bye)\b[\s!.?]*$")
