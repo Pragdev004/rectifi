@@ -90,7 +90,8 @@ class StopHandler(BaseCallbackHandler):
 # ───────────────────────── routing (deterministic first) ─────────────────────────
 
 _CHART = re.compile(r"(?i)\b(chart|plot|graph|draw|visuali[sz]e|histogram|bar chart|pie)\b")
-_PERSONAL = re.compile(r"(?i)\b(my|mine|me|i|i'm|i've|i'd|we)\b|₹|\brs\.?\b|\binr\b|\d")
+_FIRST_PERSON = re.compile(r"(?i)\b(my|mine|me|i|i'm|i've|i'd|we)\b|₹|\brs\.?\b|\binr\b")
+_DIGIT = re.compile(r"\d")
 _AGENT = re.compile(r"(?i)\b(how much|total|spent|spend|spending|when did i|budget|paid|received|got paid|salary|stipend|log|record|add|saved?|"
                     r"balance|transactions?|expenses?|income|category|categories|review|insights?|over budget|commitment)\b")
 _KNOWLEDGE = re.compile(r"(?i)^\s*(what is|what are|what's|whats|explain|how does|how do|how should|why|difference between|"
@@ -118,10 +119,10 @@ def decide_route(text: str, forced: str = "") -> tuple[str, str] | None:
         return "smalltalk", "greeting"
     if _CHART.search(text or ""):
         return "chart", "asked for a chart"
-    if _AGENT.search(text or "") or _PERSONAL.search(text or ""):
-        return "agent", "about your records"
-    if _KNOWLEDGE.match(text or ""):
+    if _KNOWLEDGE.match(text or "") and not _FIRST_PERSON.search(text or ""):
         return "knowledge", "a general question"
+    if _AGENT.search(text or "") or _FIRST_PERSON.search(text or "") or _DIGIT.search(text or ""):
+        return "agent", "about your records"
     return None
 
 
@@ -344,7 +345,7 @@ def build_supervisor(*, checkpointer, store=None, agent_graph=None, agent_llm=No
     # ── workers ──
     def agent(state: SupervisorState, config: RunnableConfig):
         shown = model_input(state)
-        out = agent_sub().invoke({"messages": shown}, config)
+        out = agent_sub().invoke({"messages": shown})
         new = [_stamp(m, "agent") for m in out["messages"][len(shown):]]
         return {"messages": new, "events": [say("agent", "done", f"{sum(isinstance(m, ToolMessage) for m in new)} tool step(s)")]}
 
