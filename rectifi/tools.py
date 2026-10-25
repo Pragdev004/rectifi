@@ -1119,7 +1119,7 @@ def inbox_prefill(item_id: int) -> dict:
 
 # ═══ WS-RAG: begin ═══
 # Knowledge documents and the rows the knowledge loaders read. Plain SQL and plain text: no model, no embeddings here.
-# The vector maths and the chunk rows' embeddings live in rectifi/rag/ (it may load langchain; this file may not).
+# The vector maths and the chunk embeddings live in rectifi/rag/ (it may use model libraries; this file may not).
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"      # the built-in guides, shipped with Rectifi
 RAG_CORPORA = ("guide", "note", "upload", "txn")
