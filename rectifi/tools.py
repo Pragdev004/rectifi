@@ -14,7 +14,8 @@ import secrets
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from .categorize import FALLBACK_EXPENSE, FALLBACK_INCOME, fallback_name
+from . import categorize
+from .categorize import FALLBACK_EXPENSE, FALLBACK_INCOME, fallback_name, merchant_key
 from .db import connect
 from .money import D0, PAISE, fmt_inr, parse_amount
 from .parsing import best_effort_sms, classify_sms, parse_sms
@@ -26,13 +27,17 @@ class RectifiError(ValueError):
 
 TXN_SELECT = """
 SELECT t.id, t.txn_date, t.amount, t.direction, t.payee, t.description, t.note, t.source,
-       t.upi_ref, t.account_id, a.name AS account, t.category_id, c.name AS category, c.kind AS category_kind
+       t.upi_ref, t.account_id, a.name AS account, t.category_id, c.name AS category, c.kind AS category_kind,
+       t.category_source, t.category_confidence, t.category_reason, t.classify_state,
+       t.suggested_category_id, sc.name AS suggested_category, t.suggested_confidence
 FROM transactions t
-LEFT JOIN categories c ON c.id = t.category_id
-LEFT JOIN accounts   a ON a.id = t.account_id
+LEFT JOIN categories c  ON c.id  = t.category_id
+LEFT JOIN categories sc ON sc.id = t.suggested_category_id
+LEFT JOIN accounts   a  ON a.id  = t.account_id
 """
 
 DIRECTIONS = {"debit", "credit"}
+LEARN_MIN_KEY = 3           # a correction teaches a rule only when the merchant key is at least this long
 
 
 # ─────────────────────────── dates ───────────────────────────
@@ -131,21 +136,25 @@ def _check_kind(conn, category_id: int, direction: str) -> None:
         )
 
 
+def _categorize_detail(conn, payee: str | None, description: str | None, direction: str,
+                       ctx: "categorize.Context | None" = None) -> tuple[int, categorize.Decision]:
+    """The fixed layers (learned rule, built-in rule, heuristic, look-alike past payment, else the catch-all).
+    Returns (category id, why). Pass a `ctx` from categorize.load_context(conn) to reuse it across many rows."""
+    ctx = ctx or categorize.load_context(conn)
+    decision = categorize.decide_with(ctx, payee, description, direction)
+    return ctx.category_ids[decision.category], decision
+
+
 def _categorize(conn, payee: str | None, description: str | None, direction: str) -> int:
-    """Rule-based: the first merchant pattern found in the payee/description wins (longest pattern first)."""
-    haystack = f"{payee or ''} {description or ''}".lower()
-    if haystack.strip():
-        row = conn.execute(
-            """SELECT r.category_id FROM merchant_rules r JOIN categories c ON c.id = r.category_id
-               WHERE strpos(%s, r.pattern) > 0
-                 AND (c.kind = %s OR c.kind = 'transfer')
-               ORDER BY length(r.pattern) DESC LIMIT 1""",
-            (haystack, "expense" if direction == "debit" else "income"),
-        ).fetchone()
-        if row:
-            return row["category_id"]
-    fallback = fallback_name(direction)
-    return conn.execute("SELECT id FROM categories WHERE name = %s", (fallback,)).fetchone()["id"]
+    """The category id for a new payment. See _categorize_detail for the reason too."""
+    return _categorize_detail(conn, payee, description, direction)[0]
+
+
+def _suggestion_id(ctx_or_conn, decision: categorize.Decision) -> int | None:
+    if not decision.suggested:
+        return None
+    row = ctx_or_conn.execute("SELECT id FROM categories WHERE name = %s", (decision.suggested,)).fetchone()
+    return row["id"] if row else None
 
 
 def _account_id(conn, account: str | int | None) -> int | None:
@@ -255,21 +264,26 @@ def add_transaction(
     upi_ref = upi_ref.strip() if upi_ref else None
 
     def insert(conn) -> dict:
+        suggested_id = None
         if category:
             category_id = _category_id(conn, category)
             _check_kind(conn, category_id, direction)
+            why = categorize.Decision(category, "user", 100, "you chose")
         else:
-            category_id = _categorize(conn, payee, description, direction)
+            category_id, why = _categorize_detail(conn, payee, description, direction)
+            suggested_id = _suggestion_id(conn, why)
         account_id = _account_id(conn, account)
         row = conn.execute(
             """INSERT INTO transactions
                  (account_id, amount, direction, txn_date, payee, description, upi_ref, fingerprint,
-                  category_id, source, raw_text, note)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                  category_id, source, raw_text, note,
+                  category_source, category_confidence, category_reason, suggested_category_id, suggested_confidence)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT DO NOTHING
                RETURNING id""",
             (account_id, value, direction, when, payee, description, upi_ref, fingerprint,
-             category_id, source, raw_text, note),
+             category_id, source, raw_text, note,
+             why.source, why.confidence, why.reason, suggested_id, why.suggested_confidence if suggested_id else None),
         ).fetchone()
         if row is None:
             existing = conn.execute(
@@ -286,7 +300,8 @@ def add_transaction(
 
 
 def set_category(txn_id: int, category: str, remember: bool = False) -> dict:
-    """Recategorise a transaction. remember=True teaches Rectifi: future payments to this payee get the same category."""
+    """Recategorise a transaction. The row now says the category is yours (source 'user', 100%) and any model suggestion
+    is dropped. remember=True teaches Rectifi: future payments that look like this merchant get the same category."""
     with connect() as conn:
         category_id = _category_id(conn, category)
         current = conn.execute("SELECT direction FROM transactions WHERE id = %s", (txn_id,)).fetchone()
@@ -294,14 +309,18 @@ def set_category(txn_id: int, category: str, remember: bool = False) -> dict:
             raise RectifiError(f"No transaction #{txn_id}.")
         _check_kind(conn, category_id, current["direction"])
         row = conn.execute(
-            "UPDATE transactions SET category_id = %s WHERE id = %s RETURNING payee", (category_id, txn_id)
+            """UPDATE transactions SET category_id = %s, category_source = 'user', category_confidence = 100,
+                      category_reason = 'you chose', suggested_category_id = NULL, suggested_confidence = NULL,
+                      classify_state = CASE WHEN classify_state = 'pending' THEN 'done' ELSE classify_state END
+               WHERE id = %s RETURNING payee, description""",
+            (category_id, txn_id),
         ).fetchone()
         learned = None
-        if remember and row["payee"]:
-            pattern = row["payee"].strip().lower()
+        pattern = merchant_key(row["payee"], row["description"])
+        if remember and len(pattern) >= LEARN_MIN_KEY:
             conn.execute(
-                """INSERT INTO merchant_rules (pattern, category_id) VALUES (%s, %s)
-                   ON CONFLICT (pattern) DO UPDATE SET category_id = EXCLUDED.category_id""",
+                """INSERT INTO merchant_rules (pattern, category_id, source) VALUES (%s, %s, 'learned')
+                   ON CONFLICT (pattern) DO UPDATE SET category_id = EXCLUDED.category_id, source = 'learned'""",
                 (pattern, category_id),
             )
             learned = pattern
