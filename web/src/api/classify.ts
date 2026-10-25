@@ -59,3 +59,9 @@ export const startSorting = (batchId: number | null) =>
   post<{ job: ClassifyJob | null; waiting: number }>("/classify/jobs", batchId === null ? {} : { batch_id: batchId });
 
 export const applyToSimilar = (txnId: number) => post<{ changed: number }>(`/transactions/${txnId}/apply-similar`);
+
+/** What POST /api/imports answers beyond the basic outcome: the sorting job (if rows were left) and the source counts. */
+export interface ClassifyOutcome {
+  classify_job_id: number | null;
+  categories: BatchSummary;
+}

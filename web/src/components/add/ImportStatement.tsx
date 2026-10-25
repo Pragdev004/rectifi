@@ -11,6 +11,7 @@ import { ReconSlip } from "../ReconSlip";
 import { useToast } from "../Toast";
 import { useIsDesktop } from "../../lib/media";
 import { Callout, Disclosure, Eyebrow, Stamp } from "../ui";
+import { ImportCategories } from "./ImportCategories";
 import styles from "./add.module.css";
 
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -222,6 +223,7 @@ function ImportResult({
       ) : outcome.reconcile_reason ? (
         <p className={styles.help}>{outcome.reconcile_reason}</p>
       ) : null}
+      {b.added > 0 && <ImportCategories batchId={b.id} />}
       {b.added === 0 ? (
         <p className={styles.help}>This import added nothing new, so there is nothing to undo.</p>
       ) : (
