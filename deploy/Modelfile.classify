@@ -1,0 +1,6 @@
+# rectifi-classify: a small, fast, steady model for sorting payments into categories.
+# Built by:  python scripts/dev.py ollama-setup      (FROM below is the 12-16 GB laptop choice; the command swaps it for your RAM tier)
+FROM qwen2.5:3b
+SYSTEM """You sort one personal-finance payment into exactly one category. The message gives you the allowed categories. Choose only from that list. Reply with the JSON the message asks for and nothing else. If you are not sure, say so with a low confidence instead of guessing."""
+PARAMETER temperature 0
+PARAMETER num_ctx 8192
