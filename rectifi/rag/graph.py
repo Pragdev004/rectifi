@@ -118,6 +118,7 @@ class RagState(TypedDict, total=False):
     generation_rounds: int
     allowed_text: str
     web_ok: bool
+    web_asked: bool
     rewritten: str
     abstained: bool
     trace: Annotated[list, _trace_reducer]
@@ -262,7 +263,7 @@ def build_rag_subgraph(*, llms: dict, embeddings, checkpointer=None, store=None,
         shown = {"tools": "use your numbers", "retrieve": "look it up", "direct": "answer directly", "decline": "not for me"}[route]
         return {"mode": mode, "route": route, "retrieval_rounds": 0, "generation_rounds": 0, "citations": [], "unverified": [], "unsupported": [],
                 "carry": [], "kept": [], "documents": [], "allowed_text": "", "support": None, "useful": None, "abstained": False,
-                "answer": "", "queries": [], "rewritten": "", "crag": None, "web_ok": False, "grades": [{"reset": True}],
+                "answer": "", "queries": [], "rewritten": "", "crag": None, "web_ok": False, "web_asked": False, "grades": [{"reset": True}],
                 "trace": [{"reset": True}, ev("ROUTED", shown, f"{why} ({by})".strip())]}
 
     def after_route(state: RagState):
@@ -379,7 +380,7 @@ def build_rag_subgraph(*, llms: dict, embeddings, checkpointer=None, store=None,
                 "trace": [ev("REWROTE", "asked again", f"Asked again as: {rewritten}")]}
 
     def web_allowed(state: RagState) -> bool:
-        if state.get("crag") != "incorrect" or not web.available() or graders.is_personal(state["question"]):
+        if state.get("crag") != "incorrect" or state.get("web_asked") or not web.available() or graders.is_personal(state["question"]):
             return False
         return not any(d.metadata.get("corpus") in ("note", "txn") for d in state.get("kept", []))
 
@@ -391,7 +392,7 @@ def build_rag_subgraph(*, llms: dict, embeddings, checkpointer=None, store=None,
                             "message": f"Search the web for '{state['rewritten']}'? Only this query is sent to DuckDuckGo. Nothing about your money is sent.",
                             "choices": ["Search", "Answer without it"]})
         allowed = answer is True or (isinstance(answer, dict) and answer.get("search") is True) or (isinstance(answer, str) and answer.lower() in ("search", "yes", "true"))
-        return {"web_ok": bool(allowed), "trace": [ev("WEB", "asked" if allowed else "declined", "you allowed one generic search" if allowed else "you chose to answer without the web")]}
+        return {"web_ok": bool(allowed), "web_asked": True, "trace": [ev("WEB", "asked" if allowed else "declined", "you allowed one generic search" if allowed else "you chose to answer without the web")]}
 
     def after_consent(state: RagState):
         return "web_search" if state.get("web_ok") else "retrieve"
