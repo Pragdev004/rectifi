@@ -169,7 +169,20 @@ def review(r: dict) -> dict:
 # ═══ WS-CHARTS: end ═══
 
 # ═══ WS-CHAT: begin ═══
-# wire shapes for conversations and messages.
+# Conversations, memories and trace rows. Timestamps are ISO date-times with an offset (to_wire does that); no money here.
+
+def conversation(row: dict) -> dict:
+    return {"thread_id": row["thread_id"], "title": row["title"], "preview": row["preview"],
+            "created_at": row["created_at"], "updated_at": row["updated_at"]}
+
+
+def memory_item(item: dict) -> dict:
+    return {"id": item["id"], "kind": item["kind"], "text": item["text"], "created_at": item.get("created_at"),
+            "updated_at": item.get("updated_at"), "thread_id": item.get("thread_id")}
+
+
+def learned_rule(row: dict) -> dict:
+    return {"id": row["id"], "pattern": row["pattern"], "category": row["category"], "created_at": row["created_at"]}
 # ═══ WS-CHAT: end ═══
 
 # ═══ WS-RAG: begin ═══
