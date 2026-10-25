@@ -299,9 +299,8 @@ def test_dev_py_lists_the_commands(models):
     assert "llm-check" in out and "ollama-setup" in out
 
 
-def test_eval_reports_not_built_yet_for_a_missing_module(models, monkeypatch, tmp_path):
+def test_eval_reports_not_built_yet_for_a_missing_module(models, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(models, "project_python", lambda: sys.executable)
     monkeypatch.setattr(models, "ROOT", tmp_path)                      # an empty project: rectifi.evals does not exist there
-    with pytest.raises(SystemExit) as stop:
-        models.run_eval(["rag"])
-    assert "not built yet" in str(stop.value)
+    models.run_eval(["rag"])
+    assert "eval rag: not built yet." in capsys.readouterr().out

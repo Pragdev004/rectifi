@@ -341,7 +341,9 @@ def doctor_checks(setting, quick: bool = False, sandbox_check: bool = True) -> l
             out.append(("warn", f"LLM: {provider}, but {', '.join(missing)} is empty (the Ask page will be off)", "Put " + ", ".join(missing) + " in .env."
                         + (" `python scripts/dev.py free-models` lists models you can use." if provider == "openrouter" else "")))
         elif quick:
-            out.append(("ok", f"LLM: {provider}, model {model}, key is set (not tested: --quick)", ""))
+            say = "API key is set, " if provider == "deepseek" else ""
+            out.append(("ok", f"LLM: {provider}, {say}model {model}, key is set (not tested: --quick)" if not say else
+                        f"LLM: {provider}, API key is set, model {model} (not tested: --quick)", ""))
         else:
             out.append(openai_round_trip(provider, setting))
         if provider == "huggingface":
@@ -444,12 +446,17 @@ def project_python() -> str:
 
 CLASSIFY_SNIPPET = """
 import sys
-from rectifi.agent.classify import classify_pending
+try:
+    from rectifi.agent.classify import classify_pending
+except ModuleNotFoundError:
+    print('classify: not built yet.')
+    sys.exit(0)
 raw = sys.argv[1] if len(sys.argv) > 1 else ''
 try:
     out = classify_pending(int(raw) if raw else None, progress=lambda *a: print('...', *a, flush=True))
 except NotImplementedError as exc:
-    sys.exit(str(exc))
+    print('classify: not built yet.')
+    sys.exit(0)
 print(out)
 """
 
@@ -469,7 +476,8 @@ def run_eval(args: list[str]) -> None:
     result = subprocess.run([project_python(), "-m", module, *[a for a in args if a != which]], cwd=ROOT, capture_output=True, text=True)
     sys.stdout.write(result.stdout)
     if result.returncode and "No module named" in result.stderr and module in result.stderr:
-        sys.exit(f"eval {which}: not built yet.")
+        print(f"eval {which}: not built yet.")
+        return
     sys.stderr.write(result.stderr)
     if result.returncode:
         sys.exit(result.returncode)
