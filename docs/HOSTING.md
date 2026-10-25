@@ -114,6 +114,7 @@ python3 scripts/dev.py set-password --print
 nano .env.deploy
 ```
 
+- (If `dev.py` says "unrecognized arguments" for `--print`, run `python3 scripts/devtools/deploy.py set-password --print` instead.)
 - `set-password --print` asks for your password twice, then prints two lines. The password must be at least 12 characters. Three or four random words works. It never shows or saves the password itself, only a scrambled copy.
 - In `nano`, set `RECTIFI_HOSTNAME`, set `POSTGRES_PASSWORD` to the output of `openssl rand -hex 24`, and paste the two lines over the two empty ones. Keep the single quotes around the hash. Save with Ctrl+O, Enter, Ctrl+X.
 

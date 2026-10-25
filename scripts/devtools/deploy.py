@@ -289,3 +289,10 @@ COMMANDS = {
     "set-password": (set_password, "choose the password that protects Rectifi when it is online"),
     "deploy-check": (deploy_check, "check the hosting files and settings before you deploy"),
 }
+
+
+if __name__ == "__main__":
+    # `python scripts/devtools/deploy.py set-password --print` also works, without going through dev.py
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        raise SystemExit("usage: deploy.py {" + "|".join(COMMANDS) + "} [options]")
+    COMMANDS[sys.argv[1]][0](sys.argv[2:])
