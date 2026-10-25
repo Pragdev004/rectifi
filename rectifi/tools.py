@@ -1109,7 +1109,177 @@ def inbox_prefill(item_id: int) -> dict:
 # ═══ WS-CLASSIFY: end ═══
 
 # ═══ WS-CHARTS: begin ═══
-# chart_reference_totals, prepared chart frames (integer paise), saved charts list/get/pin/delete.
+# chart_period, chart_frame (integer paise), chart_reference_totals (Decimal), saved charts: save/list/get/pin/delete.
+# The frame goes only into the chart sandbox; the model sees a schema and fake rows (rectifi/charts/prompts.py).
+
+CHART_FRAME_COLUMNS = ["date", "month", "weekday", "amount_paise", "amount", "direction", "category", "category_kind", "payee", "account"]
+CHART_BUDGET_COLUMNS = ["month", "category", "limit_paise"]
+CHART_FRAME_MAX_ROWS = 20000
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def chart_period(text: str | None) -> tuple[date, date, str]:
+    """A chart period as words -> (start, end, label). Understands 'YYYY-MM', 'this_month', 'last_month', 'last-30-days',
+    'last-3-months' (the default), 'all' and 'YYYY-MM-DD..YYYY-MM-DD'. The end is never after today."""
+    raw = (text or "last-3-months").strip().lower().replace("_", "-").replace(" ", "-")
+    now = today()
+    if raw in ("all", "everything", "all-time"):
+        with connect() as conn:
+            first = conn.execute("SELECT MIN(txn_date) AS d FROM transactions").fetchone()["d"]
+        return (first or now), now, "all time"
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", raw)
+    if match:
+        start, end = date.fromisoformat(match.group(1)), date.fromisoformat(match.group(2))
+        if start > end:
+            raise RectifiError("The start of the period is after its end.")
+        return start, min(end, now), f"{start.isoformat()} to {min(end, now).isoformat()}"
+    match = re.fullmatch(r"last-(\d{1,3})-(day|days|month|months)", raw)
+    if match:
+        n = max(1, int(match.group(1)))
+        if match.group(2).startswith("day"):
+            return now - timedelta(days=n - 1), now, f"last {n} days"
+        first = now.replace(day=1)
+        for _ in range(n - 1):
+            first = (first - timedelta(days=1)).replace(day=1)
+        return first, now, f"last {n} months"
+    first, last = month_bounds(raw.replace("-month", "_month"))     # 'YYYY-MM', 'this-month', 'last-month' (RectifiError if unreadable)
+    return first, min(last, now), first.strftime("%b %Y")
+
+
+def chart_frame(start: date, end: date) -> dict:
+    """Everything the chart sandbox gets, as plain JSON-able lists. Money is integer paise (`amount` is a float for drawing only
+    and is never added, compared or stored). Payees are masked and cut to 40 characters. No LLM ever sees these rows."""
+    from .privacy import mask_sensitive
+
+    first = start.replace(day=1)
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT t.txn_date, t.amount, t.direction, c.name AS category, c.kind AS category_kind, t.payee, a.name AS account
+               FROM transactions t
+               LEFT JOIN categories c ON c.id = t.category_id
+               LEFT JOIN accounts a ON a.id = t.account_id
+               WHERE t.txn_date BETWEEN %s AND %s
+               ORDER BY t.txn_date, t.id LIMIT %s""",
+            (start, end, CHART_FRAME_MAX_ROWS + 1),
+        ).fetchall()
+        budget_rows = conn.execute(
+            """SELECT b.month, c.name AS category, b.limit_amount FROM budgets b JOIN categories c ON c.id = b.category_id
+               WHERE b.month BETWEEN %s AND %s ORDER BY b.month, c.name""",
+            (first, end),
+        ).fetchall()
+        category_rows = conn.execute("SELECT name, kind FROM categories ORDER BY kind, name").fetchall()
+    truncated = len(rows) > CHART_FRAME_MAX_ROWS
+    out = []
+    for r in rows[:CHART_FRAME_MAX_ROWS]:
+        paise = int((Decimal(r["amount"]) * 100).to_integral_value(ROUND_HALF_UP))
+        payee = mask_sensitive(r["payee"] or "")[:40]
+        d = r["txn_date"]
+        out.append([d.isoformat(), d.strftime("%Y-%m"), _WEEKDAYS[d.weekday()], paise, float(Decimal(paise) / 100), r["direction"],
+                    r["category"] or "Uncategorised", r["category_kind"] or "expense", payee, r["account"] or ""])
+    return {
+        "start": start.isoformat(), "end": end.isoformat(), "truncated": truncated,
+        "transaction_columns": CHART_FRAME_COLUMNS, "transactions": out,
+        "budget_columns": CHART_BUDGET_COLUMNS,
+        "budgets": [[b["month"].strftime("%Y-%m"), b["category"], int((Decimal(b["limit_amount"]) * 100).to_integral_value(ROUND_HALF_UP))]
+                    for b in budget_rows],
+        "categories": [[c["name"], c["kind"]] for c in category_rows],
+    }
+
+
+def chart_reference_totals(start: date, end: date) -> dict:
+    """The figures a chart's text may quote, as Decimal, worked out by SQL: spending (debits in expense categories) and income
+    (credits in income categories) overall, by category, by month, by category x month and by day; budget limits; the
+    number of entries. checks.py compares every rupee figure in a chart's text against these and against what is plotted."""
+    def block(direction: str, kind: str) -> dict:
+        where = "t.txn_date BETWEEN %s AND %s AND t.direction = %s AND c.kind = %s"
+        args = (start, end, direction, kind)
+        with connect() as conn:
+            overall = conn.execute(f"SELECT COALESCE(SUM(t.amount), 0) AS v, COUNT(*) AS n FROM transactions t JOIN categories c ON c.id = t.category_id WHERE {where}", args).fetchone()
+            by_cat = conn.execute(f"SELECT c.name AS k, SUM(t.amount) AS v FROM transactions t JOIN categories c ON c.id = t.category_id WHERE {where} GROUP BY c.name", args).fetchall()
+            by_month = conn.execute(f"SELECT to_char(t.txn_date, 'YYYY-MM') AS k, SUM(t.amount) AS v FROM transactions t JOIN categories c ON c.id = t.category_id WHERE {where} GROUP BY 1", args).fetchall()
+            by_cat_month = conn.execute(f"SELECT c.name AS k, to_char(t.txn_date, 'YYYY-MM') AS m, SUM(t.amount) AS v FROM transactions t JOIN categories c ON c.id = t.category_id WHERE {where} GROUP BY 1, 2", args).fetchall()
+            by_day = conn.execute(f"SELECT t.txn_date AS k, SUM(t.amount) AS v FROM transactions t JOIN categories c ON c.id = t.category_id WHERE {where} GROUP BY 1", args).fetchall()
+        return {"overall": Decimal(overall["v"]), "count": overall["n"],
+                "by_category": {r["k"]: Decimal(r["v"]) for r in by_cat},
+                "by_month": {r["k"]: Decimal(r["v"]) for r in by_month},
+                "by_category_month": {(r["k"], r["m"]): Decimal(r["v"]) for r in by_cat_month},
+                "by_day": {r["k"]: Decimal(r["v"]) for r in by_day}}
+
+    spending, income = block("debit", "expense"), block("credit", "income")
+    with connect() as conn:
+        limits = conn.execute(
+            """SELECT c.name AS category, to_char(b.month, 'YYYY-MM') AS m, b.limit_amount AS v FROM budgets b JOIN categories c ON c.id = b.category_id
+               WHERE b.month BETWEEN %s AND %s""", (start.replace(day=1), end)).fetchall()
+        entries = conn.execute("SELECT COUNT(*) AS n FROM transactions WHERE txn_date BETWEEN %s AND %s", (start, end)).fetchone()["n"]
+    by_month_limit: dict = {}
+    for r in limits:
+        by_month_limit[r["m"]] = by_month_limit.get(r["m"], D0) + Decimal(r["v"])
+    return {"start": start, "end": end, "entries": entries, "spending": spending, "income": income,
+            "net": income["overall"] - spending["overall"],
+            "budget_limits": {"by_category_month": {(r["category"], r["m"]): Decimal(r["v"]) for r in limits}, "by_month": by_month_limit}}
+
+
+_CHART_LIST_COLUMNS = ("id, title, prompt, kind, period_start, period_end, pinned, model, attempts, trace, checks, thread_id, "
+                       "created_at, refreshed_at")
+
+
+def save_chart(*, title: str, prompt: str, code: str, image_light: bytes, image_dark: bytes, period_start: date | None, period_end: date | None,
+               model: str | None, attempts: int, trace: list, checks: dict, thread_id: str | None = None, pinned: bool = False) -> int:
+    from psycopg.types.json import Jsonb
+
+    with connect() as conn:
+        row = conn.execute(
+            """INSERT INTO charts (title, prompt, code, kind, image_light, image_dark, period_start, period_end, pinned, model, attempts,
+                                   trace, checks, thread_id)
+               VALUES (%s, %s, %s, 'png', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            ((title or "Chart")[:200], prompt[:2000], code, image_light, image_dark, period_start, period_end, pinned, model, max(1, int(attempts)),
+             Jsonb(trace), Jsonb(checks), thread_id),
+        ).fetchone()
+    return row["id"]
+
+
+def list_charts(pinned_only: bool = False, limit: int = 100) -> list[dict]:
+    where = "WHERE pinned" if pinned_only else ""
+    with connect() as conn:
+        return conn.execute(f"SELECT {_CHART_LIST_COLUMNS} FROM charts {where} ORDER BY COALESCE(refreshed_at, created_at) DESC, id DESC LIMIT %s",
+                            (max(1, min(int(limit), 500)),)).fetchall()
+
+
+def get_chart(chart_id: int, *, with_code: bool = True, with_images: bool = True) -> dict:
+    cols = _CHART_LIST_COLUMNS + (", code" if with_code else "") + (", image_light, image_dark" if with_images else "")
+    with connect() as conn:
+        row = conn.execute(f"SELECT {cols} FROM charts WHERE id = %s", (chart_id,)).fetchone()
+    if not row:
+        raise RectifiError("There is no saved chart with that id.")
+    return row
+
+
+def set_chart_pinned(chart_id: int, pinned: bool) -> dict:
+    with connect() as conn:
+        row = conn.execute("UPDATE charts SET pinned = %s WHERE id = %s RETURNING id", (bool(pinned), chart_id)).fetchone()
+    if not row:
+        raise RectifiError("There is no saved chart with that id.")
+    return get_chart(chart_id, with_code=False, with_images=False)
+
+
+def update_chart_run(chart_id: int, *, image_light: bytes, image_dark: bytes, period_start: date | None, period_end: date | None,
+                     trace: list, checks: dict) -> dict:
+    """Store the result of re-running a saved chart's code on the latest data (no model involved)."""
+    from psycopg.types.json import Jsonb
+
+    with connect() as conn:
+        row = conn.execute(
+            """UPDATE charts SET image_light = %s, image_dark = %s, period_start = %s, period_end = %s, trace = %s, checks = %s,
+                                 refreshed_at = now() WHERE id = %s RETURNING id""",
+            (image_light, image_dark, period_start, period_end, Jsonb(trace), Jsonb(checks), chart_id)).fetchone()
+    if not row:
+        raise RectifiError("There is no saved chart with that id.")
+    return get_chart(chart_id, with_code=False, with_images=False)
+
+
+def delete_chart(chart_id: int) -> bool:
+    with connect() as conn:
+        return conn.execute("DELETE FROM charts WHERE id = %s", (chart_id,)).rowcount > 0
 # ═══ WS-CHARTS: end ═══
 
 # ═══ WS-CHAT: begin ═══
