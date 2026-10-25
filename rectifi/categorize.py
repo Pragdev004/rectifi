@@ -128,7 +128,7 @@ HEURISTICS = [
     _h(r"\b(rent|nobroker)\b", "debit", "Rent", 85),
     _h(r"\b(hpcl|bpcl|iocl|indian\s*oil|nayara|petrol|fuel)\b", "debit", "Fuel", 90),
     _h(r"\b(pharma|pharmacy|chemist|medical|hospital|clinic|diagnostics?|dental)\b", "debit", "Health", 85),
-    _h(r"\b(restaurant|biryani|pizza|burger|bakery|canteen|dhaba|tiffin|chai|coffee|juice)\b", "debit", "Food & Dining", 80),
+    _h(r"\b(restaurant|biryani|pizza|burger|bakery|canteen|dhaba|tiffin|juice)\b", "debit", "Food & Dining", 80),
     _h(r"\b(supermarket|kirana|grocery|groceries|vegetables)\b", "debit", "Groceries", 80),
     _h(r"\b(cinema|movies?|theatre|multiplex)\b", "debit", "Entertainment", 80),
     _h(r"\b(flights?|airlines?|airways|resort|homestay)\b", "debit", "Travel", 80),

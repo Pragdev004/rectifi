@@ -1124,7 +1124,220 @@ def inbox_prefill(item_id: int) -> dict:
 # Edit only inside your own block. Nothing in this file talks to an LLM (CLAUDE.md rule 5).
 
 # ═══ WS-CLASSIFY: begin ═══
-# apply_classifications, classify job rows, 'sort my Miscellaneous entries again', set_category(source='user') and learned rules.
+# Classification bookkeeping. The fixed layers live in categorize.py; the optional model pass is rectifi/agent/classify.py,
+# which only calls these functions to read pending rows and to write its answers. Nothing here talks to a model.
+
+RELABELLABLE_SOURCES = ("fallback", "llm", "retrieval", "heuristic")     # "apply to similar" never touches user/learned/rule rows
+UNFINISHED_JOB = ("queued", "running", "no_model")
+SHOW_FILTERS = ("all", "misc", "model", "suggested")
+
+
+def category_names_for(direction: str) -> list[str]:
+    """Names a payment of this direction may be filed under (a debit never gets an income category)."""
+    kinds = categorize.KIND_FOR[direction]
+    with connect() as conn:
+        return [r["name"] for r in conn.execute("SELECT name FROM categories WHERE kind = ANY(%s) ORDER BY name", (list(kinds),)).fetchall()]
+
+
+def pending_classification(batch_id: int | None = None, limit: int = 5000) -> list[dict]:
+    """Rows the fixed layers could not place and the model has not looked at yet: id, direction, amount, payee, description."""
+    where, params = "classify_state = 'pending' AND category_source = 'fallback'", []
+    if batch_id is not None:
+        where += " AND import_batch_id = %s"
+        params.append(batch_id)
+    with connect() as conn:
+        return conn.execute(
+            f"SELECT id, direction, amount, payee, description FROM transactions WHERE {where} ORDER BY id LIMIT %s",
+            [*params, limit],
+        ).fetchall()
+
+
+def apply_classifications(items: list[dict]) -> dict:
+    """Write the model's answers. Each item: {id, category, confidence (0-100), reason, apply: bool}.
+    apply=True stores the category (source 'llm'); apply=False stores it only as a suggestion. Either way the row is 'done'.
+
+    The UPDATE touches no money, date, account, reference or fingerprint, and only a row that is still pending AND still
+    the catch-all: a correction you made while the job ran (source 'user') wins. Returns {'applied', 'suggested', 'skipped'}."""
+    applied = suggested = skipped = 0
+    with connect() as conn:
+        for item in items:
+            row = conn.execute("SELECT direction FROM transactions WHERE id = %s", (item["id"],)).fetchone()
+            cat = conn.execute("SELECT id, kind FROM categories WHERE name = %s", (item["category"],)).fetchone()
+            if row is None or cat is None or cat["kind"] not in categorize.KIND_FOR[row["direction"]]:
+                skipped += 1
+                continue
+            confidence = max(0, min(100, int(item["confidence"])))
+            if item.get("apply"):
+                n = conn.execute(
+                    """UPDATE transactions SET category_id = %s, category_source = 'llm', category_confidence = %s,
+                              category_reason = %s, suggested_category_id = NULL, suggested_confidence = NULL, classify_state = 'done'
+                       WHERE id = %s AND classify_state = 'pending' AND category_source = 'fallback'""",
+                    (cat["id"], confidence, (item.get("reason") or "the local model")[:120], item["id"]),
+                ).rowcount
+                applied += n
+            else:
+                n = conn.execute(
+                    """UPDATE transactions SET suggested_category_id = %s, suggested_confidence = %s, classify_state = 'done'
+                       WHERE id = %s AND classify_state = 'pending' AND category_source = 'fallback'""",
+                    (cat["id"], confidence, item["id"]),
+                ).rowcount
+                suggested += n
+            skipped += 0 if n else 1
+    return {"applied": applied, "suggested": suggested, "skipped": skipped}
+
+
+def finish_classification(ids: list[int]) -> int:
+    """The model looked at these rows and was not sure enough: leave them in the catch-all and stop waiting."""
+    if not ids:
+        return 0
+    with connect() as conn:
+        return conn.execute(
+            "UPDATE transactions SET classify_state = 'done' WHERE id = ANY(%s) AND classify_state = 'pending'", (ids,)
+        ).rowcount
+
+
+def apply_category_to_similar(txn_id: int) -> int:
+    """Give every look-alike payment (same merchant key, same direction) the category of this one. Only rows the machine
+    guessed (catch-all, model, look-alike, word pattern) change; rows you set, rules you taught and built-in rules never do.
+    Returns how many changed."""
+    with connect() as conn:
+        base = conn.execute(
+            "SELECT direction, payee, description, category_id FROM transactions WHERE id = %s", (txn_id,)
+        ).fetchone()
+        if base is None:
+            raise RectifiError(f"No transaction #{txn_id}.")
+        key = merchant_key(base["payee"], base["description"])
+        if len(key) < LEARN_MIN_KEY:
+            return 0
+        _check_kind(conn, base["category_id"], base["direction"])
+        rows = conn.execute(
+            """SELECT id, payee, description FROM transactions
+               WHERE id <> %s AND direction = %s AND category_id <> %s AND category_source = ANY(%s)""",
+            (txn_id, base["direction"], base["category_id"], list(RELABELLABLE_SOURCES)),
+        ).fetchall()
+        ids = [r["id"] for r in rows if merchant_key(r["payee"], r["description"]) == key]
+        if not ids:
+            return 0
+        return conn.execute(
+            """UPDATE transactions SET category_id = %s, category_source = 'learned', category_confidence = 98,
+                      category_reason = %s, suggested_category_id = NULL, suggested_confidence = NULL,
+                      classify_state = CASE WHEN classify_state = 'pending' THEN 'done' ELSE classify_state END
+               WHERE id = ANY(%s) AND category_source = ANY(%s)""",
+            (base["category_id"], f"you taught Rectifi '{key}'"[:120], ids, list(RELABELLABLE_SOURCES)),
+        ).rowcount
+
+
+def queue_miscellaneous_resort() -> int:
+    """"Sort my Miscellaneous entries again": mark every catch-all row that was never decided by you as pending.
+    Rows with no recorded source (older than this feature) are stamped 'fallback' so the model pass may touch them.
+    Returns how many rows are now waiting."""
+    with connect() as conn:
+        conn.execute(
+            """UPDATE transactions t SET category_source = 'fallback'
+               FROM categories c WHERE c.id = t.category_id AND c.name = ANY(%s) AND t.category_source IS NULL""",
+            (list(categorize.FALLBACK_NAMES),),
+        )
+        return conn.execute(
+            """UPDATE transactions SET classify_state = 'pending'
+               WHERE category_source = 'fallback' AND classify_state IS DISTINCT FROM 'pending'
+                 AND category_id IN (SELECT id FROM categories WHERE name = ANY(%s))""",
+            (list(categorize.FALLBACK_NAMES),),
+        ).rowcount
+
+
+def create_classify_job(batch_id: int | None, status: str = "queued", error: str | None = None) -> int | None:
+    """One job row for the rows waiting in a batch (or everywhere when batch_id is None). None when nothing waits."""
+    waiting = len(pending_classification(batch_id))
+    if waiting == 0:
+        return None
+    with connect() as conn:
+        return conn.execute(
+            "INSERT INTO classify_jobs (batch_id, status, total, error) VALUES (%s, %s, %s, %s) RETURNING id",
+            (batch_id, status, waiting, error),
+        ).fetchone()["id"]
+
+
+def get_classify_job(job_id: int) -> dict | None:
+    """Progress of a job. A job whose import was undone becomes 'cancelled' here, so Undo needs no hook of its own."""
+    with connect() as conn:
+        job = conn.execute("SELECT * FROM classify_jobs WHERE id = %s", (job_id,)).fetchone()
+        if job and job["batch_id"] is not None and job["status"] in UNFINISHED_JOB:
+            undone = conn.execute("SELECT undone_at FROM import_batches WHERE id = %s", (job["batch_id"],)).fetchone()
+            if undone and undone["undone_at"] is not None:
+                job = conn.execute(
+                    "UPDATE classify_jobs SET status = 'cancelled', finished_at = now() WHERE id = %s RETURNING *", (job_id,)
+                ).fetchone()
+        return job
+
+
+def update_classify_job(job_id: int, **fields) -> None:
+    allowed = {"status", "total", "done", "by_source", "model", "error"}
+    bad = set(fields) - allowed
+    if bad:
+        raise ValueError(f"Unknown classify job fields: {sorted(bad)}")
+    if not fields:
+        return
+    import json as _json
+
+    sets, params = [], []
+    for name, value in fields.items():
+        if name == "by_source":
+            sets.append("by_source = %s::jsonb")
+            params.append(_json.dumps(value))
+        else:
+            sets.append(f"{name} = %s")
+            params.append(value)
+    if fields.get("status") in ("done", "failed", "cancelled", "no_model"):
+        sets.append("finished_at = now()")
+    with connect() as conn:
+        conn.execute(f"UPDATE classify_jobs SET {', '.join(sets)} WHERE id = %s AND status <> 'cancelled'", [*params, job_id])
+
+
+def classify_job_for_batch(batch_id: int) -> int | None:
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM classify_jobs WHERE batch_id = %s ORDER BY id DESC LIMIT 1", (batch_id,)).fetchone()
+    return row["id"] if row else None
+
+
+def unfinished_classify_jobs() -> list[dict]:
+    """Jobs a restart interrupted ('queued' or 'running'). 'no_model' jobs wait for the person to ask again."""
+    with connect() as conn:
+        return conn.execute("SELECT id, batch_id FROM classify_jobs WHERE status IN ('queued', 'running') ORDER BY id").fetchall()
+
+
+def batch_rows(batch_id: int, show: str = "all", limit: int = 1000) -> list[dict]:
+    """The rows one import added, with how each got its category. show: all | misc (still the catch-all) |
+    model (decided by the model) | suggested (the model has an idea but was not sure)."""
+    if show not in SHOW_FILTERS:
+        raise RectifiError(f"show must be one of: {', '.join(SHOW_FILTERS)}.")
+    extra = {
+        "all": "", "misc": " AND c.name = ANY(%s)", "model": " AND t.category_source = 'llm'",
+        "suggested": " AND t.suggested_category_id IS NOT NULL AND t.category_source = 'fallback'",
+    }[show]
+    params: list = [batch_id]
+    if show == "misc":
+        params.append(list(categorize.FALLBACK_NAMES))
+    params.append(max(1, min(int(limit), 5000)))
+    with connect() as conn:
+        return conn.execute(
+            TXN_SELECT + " WHERE t.import_batch_id = %s" + extra + " ORDER BY t.txn_date, t.id LIMIT %s", params
+        ).fetchall()
+
+
+def batch_source_counts(batch_id: int) -> dict:
+    """{'total': n, 'by_source': {'rule': 241, ...}, 'miscellaneous': n} for the summary line above an import's rows."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT COALESCE(category_source, 'rule') AS source, COUNT(*) AS n FROM transactions WHERE import_batch_id = %s GROUP BY 1",
+            (batch_id,),
+        ).fetchall()
+        misc = conn.execute(
+            """SELECT COUNT(*) AS n FROM transactions t JOIN categories c ON c.id = t.category_id
+               WHERE t.import_batch_id = %s AND c.name = ANY(%s)""",
+            (batch_id, list(categorize.FALLBACK_NAMES)),
+        ).fetchone()["n"]
+    by_source = {r["source"]: r["n"] for r in rows}
+    return {"total": sum(by_source.values()), "by_source": by_source, "miscellaneous": misc}
 # ═══ WS-CLASSIFY: end ═══
 
 # ═══ WS-CHARTS: begin ═══
