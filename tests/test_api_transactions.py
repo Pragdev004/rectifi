@@ -164,7 +164,7 @@ def test_list_filters(client):
     assert [t["payee"] for t in client.get(f"/api/transactions?account={acct}").json()["items"]] == ["Swiggy"]
     assert [t["payee"] for t in client.get("/api/transactions?account=none").json()["items"]] == ["Corner shop", "Stipend"]
     assert [t["payee"] for t in client.get("/api/transactions?search=advance").json()["items"]] == ["Stipend"]
-    assert [t["payee"] for t in client.get("/api/transactions?period=2026-09&account=none&category=Other").json()["items"]] == ["Corner shop"]
+    assert [t["payee"] for t in client.get("/api/transactions?period=2026-09&account=none&category=Miscellaneous").json()["items"]] == ["Corner shop"]
     assert client.get("/api/transactions?category=Nonsense").status_code == 422
     assert client.get("/api/transactions?account=abc").status_code == 422
     assert client.get("/api/transactions?period=soon").status_code == 422

@@ -31,7 +31,8 @@ LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 JSON_LIMIT = 64 * 1024
 UPLOAD_LIMIT = 10 * 1024 * 1024
 UPLOAD_OVERHEAD = 64 * 1024              # multipart boundaries and form fields around the file
-UPLOAD_PATH = "/api/imports"
+UPLOAD_PATHS = frozenset({"/api/imports", "/api/knowledge/docs"})      # multipart uploads: statements, knowledge notes
+UPLOAD_PATH = "/api/imports"             # kept for older imports of this name
 WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; "
@@ -205,7 +206,7 @@ class BodyLimit:
 
     @staticmethod
     def limit_for(path: str) -> int:
-        return UPLOAD_LIMIT + UPLOAD_OVERHEAD if path == UPLOAD_PATH else JSON_LIMIT
+        return UPLOAD_LIMIT + UPLOAD_OVERHEAD if path in UPLOAD_PATHS else JSON_LIMIT
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or not _is_api(scope["path"]) or scope["method"] in ("GET", "HEAD", "OPTIONS"):
@@ -213,7 +214,7 @@ class BodyLimit:
         limit = self.limit_for(scope["path"])
         declared = Headers(scope=scope).get("content-length", "")
         if declared.isdigit() and int(declared) > limit:
-            response = JSONResponse(error_body("too_large", too_large_message(UPLOAD_LIMIT if scope["path"] == UPLOAD_PATH else limit)),
+            response = JSONResponse(error_body("too_large", too_large_message(UPLOAD_LIMIT if scope["path"] in UPLOAD_PATHS else limit)),
                                     status_code=413)
             return await response(scope, receive, send)
         seen = 0
@@ -224,7 +225,12 @@ class BodyLimit:
             if message["type"] == "http.request":
                 seen += len(message.get("body", b""))
                 if seen > limit:
-                    raise BodyTooLarge(UPLOAD_LIMIT if scope["path"] == UPLOAD_PATH else limit)
+                    raise BodyTooLarge(UPLOAD_LIMIT if scope["path"] in UPLOAD_PATHS else limit)
             return message
 
         await self.app(scope, counting_receive, send)
+
+
+# ═══ WS-HOST: begin ═══
+# SessionLock (the login for public mode), the chart-frame CSP route and any other new guard go here. WS-HOST only.
+# ═══ WS-HOST: end ═══

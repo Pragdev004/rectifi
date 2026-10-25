@@ -56,7 +56,7 @@ def seed(today: date | None = None) -> None:
     spends = [
         ("swiggy@icici", 180, 420), ("zomato@hdfcbank", 150, 380), ("blinkit@ybl", 90, 650),
         ("uber@axisbank", 70, 310), ("rapido@ybl", 40, 120), ("amazon@apl", 300, 1400),
-        ("Chai point", 20, 60), ("Campus canteen", 30, 140), ("Corner shop", 40, 250),   # no rule: stays in "Other"
+        ("Chai point", 20, 60), ("Campus canteen", 30, 140), ("Corner shop", 40, 250),   # no rule: stays in "Miscellaneous"
     ]
     day = first_day
     while day <= today:

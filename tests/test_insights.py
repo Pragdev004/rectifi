@@ -383,7 +383,7 @@ def test_a_category_that_already_has_a_budget_is_not_suggested():
 
 def test_other_is_never_suggested():
     bank()
-    spend_months("Other", {7: 3000, 8: 3000, 9: 3000}, payee="Stuff")
+    spend_months("Miscellaneous", {7: 3000, 8: 3000, 9: 3000}, payee="Stuff")
     assert kinds(insights(), "unbudgeted") == []
 
 
@@ -436,9 +436,9 @@ def test_unlinked_entries_are_counted_with_a_way_to_fix_them():
 def test_payments_stuck_in_other_are_counted():
     bank()
     for day in (2, 3, 4):
-        add(100, date(2026, 10, day), "Mystery", None)                               # no rule matches: lands in Other
+        add(100, date(2026, 10, day), "Mystery", None)                               # no rule matches: lands in Miscellaneous
     hit = only(insights(), "other_pile")
-    assert hit.severity == "watch" and hit.title == "3 payments sit in “Other” (₹300)"
+    assert hit.severity == "watch" and hit.title == "3 payments sit in “Miscellaneous” (₹300)"
     assert hit.numbers["other_total"] == D(300)
 
 

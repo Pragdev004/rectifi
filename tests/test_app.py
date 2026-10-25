@@ -108,7 +108,7 @@ def test_review_page_renders_with_data(monkeypatch):
     assert "Spent this week" in text and "64.0%" in text            # (5000 - 1800) / 5000
     assert "Amazon" in text and "Corner shop" in text              # biggest payments
     assert "Over budget" in text                                   # Shopping 1500 of 1000, said in words
-    assert "still in “Other”" in text                              # the corner shop has no category rule
+    assert "still in “Miscellaneous”" in text                              # the corner shop has no category rule
     assert "No two bank balances" in text
     assert "Up" in text                                            # up vs the same days last week
     assert at.selectbox[0].label == "Week"
@@ -278,7 +278,7 @@ def test_every_page_renders_with_data(url_path, monkeypatch):
 
 def test_ledger_notice_when_list_is_cut_off(monkeypatch):
     monkeypatch.setattr(tools, "list_transactions", lambda *a, **k: [
-        {"id": i, "txn_date": date.today(), "payee": "x", "description": None, "category": "Other", "direction": "debit",
+        {"id": i, "txn_date": date.today(), "payee": "x", "description": None, "category": "Miscellaneous", "direction": "debit",
          "amount": Decimal("1"), "source": "chat", "account": None, "note": None}
         for i in range(1000)
     ])

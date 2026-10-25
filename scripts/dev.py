@@ -763,6 +763,29 @@ def cmd_doctor(_args) -> None:
     say("Ready. Run `python scripts/dev.py up` to open the app.")
 
 
+# ───────────────────────── commands that live in scripts/devtools/*.py ─────────────────────────
+
+DEVTOOL_MODULES = ("models", "deploy")      # models.py: WS-LLM. deploy.py: WS-HOST.
+
+
+def load_devtool(name: str):
+    """scripts/devtools/<name>.py, loaded by path (like tailscale.py): standard library only, works before anything is installed."""
+    spec = importlib.util.spec_from_file_location(f"rectifi_devtool_{name}", ROOT / "scripts" / "devtools" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def devtool_commands() -> dict[str, tuple]:
+    """command name -> (module name, function, help text), read from each devtools module's COMMANDS."""
+    found = {}
+    for module_name in DEVTOOL_MODULES:
+        for command, (fn, help_text) in load_devtool(module_name).COMMANDS.items():
+            found[command] = (module_name, fn, help_text)
+    return found
+
+
 # ───────────────────────── entry point ─────────────────────────
 
 def main() -> None:
@@ -790,6 +813,10 @@ def main() -> None:
     tail = sub.add_parser("tailscale", help="publish the app (and the gateway) on your tailnet with Tailscale Serve")
     tail.add_argument("action", nargs="?", choices=["on", "off", "status"], default="on")
     tail.set_defaults(func=cmd_tailscale)
+    for command, (_module, fn, help_text) in devtool_commands().items():
+        p = sub.add_parser(command, help=help_text)
+        p.add_argument("rest", nargs=argparse.REMAINDER, help="arguments for this command")
+        p.set_defaults(func=lambda a, fn=fn: fn(a.rest))
     test = sub.add_parser("test", help="run the tests")
     test.add_argument("pytest_args", nargs=argparse.REMAINDER, help="extra arguments for pytest")
     test.set_defaults(func=cmd_test)

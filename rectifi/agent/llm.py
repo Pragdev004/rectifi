@@ -23,15 +23,19 @@ HF_CREDITS_NOTE = ("Hugging Face is not free on a free account: free accounts ge
 _FREE_MODELS_HINT = "Run `python scripts/dev.py free-models` to list free models that support tools, then put one in .env."
 
 
-def get_llm():
+def get_llm(role: str = "chat"):
+    """The chat model for a job. `role` is one of config.ROLES: chat (the Ask agent), classify, code (chart code), grade
+    (graders and the router). A role with no model named in .env uses the chat model. With a non-Ollama provider the role
+    variable names a model for THAT provider; empty means the provider's own model setting."""
     provider = config.llm_provider()
+    named = config.explicit_role_model(role)
     if provider == "deepseek":
         from langchain_deepseek import ChatDeepSeek
 
         # Thinking mode is DeepSeek's default. With tools, thinking mode requires sending every earlier
         # reasoning_content back (else HTTP 400) and it costs extra output tokens — so it's off.
         return ChatDeepSeek(
-            model=config.deepseek_model(),
+            model=named or config.deepseek_model(),
             temperature=0,
             max_retries=2,
             extra_body={"thinking": {"type": "disabled"}},
@@ -39,13 +43,21 @@ def get_llm():
     if provider == "ollama":
         from langchain_ollama import ChatOllama
 
-        return ChatOllama(model=config.ollama_model(), temperature=0, base_url=config.ollama_base_url())
+        model = named or config.ollama_model()
+        options: dict = {}
+        if model.lower().startswith("qwen3"):
+            options["reasoning"] = False          # qwen3 "thinks" by default: slow, and it breaks tool calls on small models
+        return ChatOllama(
+            model=model, temperature=0, base_url=config.ollama_base_url(),
+            num_ctx=config.ollama_num_ctx(), keep_alive=config.ollama_keep_alive(),
+            client_kwargs={"timeout": config.ollama_timeout()}, **options,
+        )
     if provider in config.OPENAI_STYLE:
         from langchain_openai import ChatOpenAI
 
         s = config.openai_style_settings(provider)
         return ChatOpenAI(
-            model=s["model"],
+            model=named or s["model"],
             base_url=s["base_url"],
             api_key=s["api_key"],
             temperature=0,
@@ -53,6 +65,17 @@ def get_llm():
             max_retries=MAX_RETRIES,
         )
     raise ValueError(f"Unknown LLM_PROVIDER {provider!r}. Use one of: {', '.join(config.PROVIDERS)}.")
+
+
+def get_embeddings():
+    """Embeddings for the knowledge library. Ollama only (nomic-embed-text by default, RECTIFI_EMBED_MODEL to change).
+    Other providers have no embeddings here: the knowledge library is off and the classifier still works without it."""
+    from langchain_ollama import OllamaEmbeddings
+
+    return OllamaEmbeddings(
+        model=config.embed_model(), base_url=config.ollama_base_url(),
+        keep_alive=config.ollama_keep_alive_seconds(), client_kwargs={"timeout": config.ollama_timeout()},
+    )
 
 
 def describe() -> str:
@@ -154,3 +177,14 @@ def explain_error(exc: Exception) -> str:
         return ("The provider says this model isn't available for tool calling (HTTP 404). Pick another model. "
                 + (_FREE_MODELS_HINT if provider == "openrouter" else ""))
     return str(exc)
+
+
+# ═══ WS-LLM: begin ═══
+# probe(), redact() and the explain_error v2 bodies go here (WS-LLM edits this block and the explain_error above it).
+
+def probe(role: str = "chat", timeout: float = 20) -> dict:
+    """Is the model for this role usable right now? Returns
+    {ok, stage, http_status, provider_message, latency_ms, tools_ok, hints[]}. F1 fixes the signature; WS-LLM implements it."""
+    raise NotImplementedError("llm.probe is written by WS-LLM")
+
+# ═══ WS-LLM: end ═══

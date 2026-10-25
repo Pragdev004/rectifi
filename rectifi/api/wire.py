@@ -11,6 +11,7 @@ import calendar
 from datetime import date, datetime
 from decimal import Decimal
 
+from ..categorize import FALLBACK_EXPENSE
 from ..insights import DATA_QUALITY_KINDS, Insight, is_money_key
 from ..money import PAISE
 
@@ -110,7 +111,7 @@ def insight_link(i: Insight) -> dict | None:
     if i.kind == "unlinked":
         return {"page": "ledger", "params": {"account": "none", "period": "all"}}
     if i.kind == "other_pile":
-        return {"page": "ledger", "params": {"category": "Other", "period": "all"}}
+        return {"page": "ledger", "params": {"category": FALLBACK_EXPENSE, "period": "all"}}
     if key.startswith(("leak:", "spike:")):
         return {"page": "ledger", "params": {"category": key.split(":", 1)[1]}}
     if i.action_page:
@@ -155,3 +156,22 @@ def review(r: dict) -> dict:
                                        for a in r["accounts_needing_attention"]],
         "last_commitment": r["last_commitment"], "commitment": r["commitment"],
     }
+
+
+# ───────────────────────── next phase: one block per workstream ─────────────────────────
+
+# ═══ WS-CLASSIFY: begin ═══
+# wire shapes for classification: txn category_source / confidence / suggestion, classify job status.
+# ═══ WS-CLASSIFY: end ═══
+
+# ═══ WS-CHARTS: begin ═══
+# wire shapes for saved charts (images as URLs or base64, never money maths).
+# ═══ WS-CHARTS: end ═══
+
+# ═══ WS-CHAT: begin ═══
+# wire shapes for conversations and messages.
+# ═══ WS-CHAT: end ═══
+
+# ═══ WS-RAG: begin ═══
+# wire shapes for knowledge documents, citations and the RAG trace.
+# ═══ WS-RAG: end ═══

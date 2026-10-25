@@ -58,7 +58,7 @@ def test_budget_states():
 
 def test_recategorise_learns_rule():
     t = tools.add_transaction("120", "debit", payee="Chai Point", source="chat")["transaction"]
-    assert t["category"] == "Other"
+    assert t["category"] == "Miscellaneous"
     tools.set_category(t["id"], "Food & Dining", remember=True)
     again = tools.add_transaction("90", "debit", payee="chai point", source="chat")["transaction"]
     assert again["category"] == "Food & Dining"

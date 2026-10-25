@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 # Read .env first, so TEST_DATABASE_URL set there is honoured.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+from fake_ollama import fake_ollama  # noqa: E402,F401  (the fixture: a fake Ollama server)
+
 TEST_URL = os.getenv("TEST_DATABASE_URL", "postgresql://rectifi:rectifi_dev@localhost:5432/rectifi_test")
 
 
@@ -22,6 +24,21 @@ def _target(url: str) -> str:
     from rectifi.db import describe_target
 
     return describe_target(url)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "ollama: needs a real Ollama server with models pulled; skipped unless you run `pytest -m ollama`")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Tests marked `ollama` talk to a real Ollama. They run only when `-m` asks for them (and not as "not ollama")."""
+    expr = (config.getoption("markexpr") or "").replace(" ", "")
+    if "ollama" in expr and "notollama" not in expr:
+        return
+    skip = pytest.mark.skip(reason="needs a real Ollama server: run `pytest -m ollama`")
+    for item in items:
+        if "ollama" in item.keywords:
+            item.add_marker(skip)
 
 
 def pytest_sessionstart(session):
@@ -51,9 +68,18 @@ def fresh_db(monkeypatch):
         tables = [r[0] for r in conn.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").fetchall()]
         if tables:
             conn.execute("DROP TABLE IF EXISTS " + ", ".join(f'"{t}"' for t in tables) + " CASCADE")
+    import sys
+
     from rectifi import db
 
+    def close_chat_memory():          # the LangGraph pool points at tables that were just dropped
+        module = sys.modules.get("rectifi.agent.checkpoint")
+        if module is not None:
+            module.close_memory()
+
+    close_chat_memory()
     db.close_pool()
     db.init_db()
     yield
+    close_chat_memory()
     db.close_pool()

@@ -6,31 +6,11 @@ They test the harness, not the LLM: routing, tool execution, and the amount guar
 import re
 from decimal import Decimal
 
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, ToolMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
-from pydantic import Field
 
 from rectifi import tools
 from rectifi.agent.graph import build_graph, chat, unverified_amounts
-
-
-class ScriptedModel(BaseChatModel):
-    """Returns the next pre-written AIMessage on every call."""
-
-    script: list
-    seen: list = Field(default_factory=list)   # every message the model was shown, for privacy tests
-
-    @property
-    def _llm_type(self) -> str:
-        return "scripted"
-
-    def bind_tools(self, tools, **kwargs):
-        return self
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        self.seen.extend(messages)
-        return ChatResult(generations=[ChatGeneration(message=self.script.pop(0))])
+from support.fakes import ScriptedModel  # noqa: F401  (moved to tests/support/fakes.py; other tests import it from here)
 
 
 def call(name, args, id="c1"):

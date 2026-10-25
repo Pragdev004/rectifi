@@ -35,8 +35,8 @@ function Attention({ data }: { data: Review }) {
     rows.push({
       key: "other",
       stamp: <Stamp tone="near">Check</Stamp>,
-      text: <>{n} {n === 1 ? "entry is" : "entries are"} still in {"\u201c"}Other{"\u201d"}. Give {n === 1 ? "it" : "them"} a real category in the Ledger.</>,
-      action: <LinkButton to="/ledger?category=Other&period=all" variant="tertiary">Fix in Ledger</LinkButton>,
+      text: <>{n} {n === 1 ? "entry is" : "entries are"} still in {"\u201c"}Miscellaneous{"\u201d"}. Give {n === 1 ? "it" : "them"} a real category in the Ledger.</>,
+      action: <LinkButton to="/ledger?category=Miscellaneous&period=all" variant="tertiary">Fix in Ledger</LinkButton>,
     });
   }
   for (const b of data.budgets_needing_attention) {

@@ -372,6 +372,7 @@ def test_init_db_upgrades_a_database_made_before_import_batches_existed():
     with connect() as conn:                                   # put the database back to how the old version left it
         conn.execute("DROP INDEX IF EXISTS idx_txn_batch")
         conn.execute("ALTER TABLE transactions DROP COLUMN import_batch_id")
+        conn.execute("DROP TABLE classify_jobs")                  # added later; it points at import_batches
         conn.execute("DROP TABLE import_batches")
     db.init_db()
     db.init_db()                                              # and running it again changes nothing

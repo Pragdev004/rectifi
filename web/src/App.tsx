@@ -14,6 +14,11 @@ import AskPage from "./pages/Ask";
 import InsightsPage from "./pages/Insights";
 import PhonePage from "./pages/Phone";
 import ReviewPage from "./pages/Review";
+import ChartsPage from "./pages/Charts";
+import LibraryPage from "./pages/Library";
+import LoginPage from "./pages/Login";
+import MemoryPage from "./pages/Memory";
+import TracesPage from "./pages/Traces";
 
 const client = new QueryClient({
   defaultOptions: {
@@ -49,6 +54,11 @@ export default function App() {
             <Route path="/accounts" component={Accounts} />
             <Route path="/phone" component={PhonePage} />
             <Route path="/ask" component={AskPage} />
+            <Route path="/charts" component={ChartsPage} />
+            <Route path="/library" component={LibraryPage} />
+            <Route path="/memory" component={MemoryPage} />
+            <Route path="/traces" component={TracesPage} />
+            <Route path="/login" component={LoginPage} />
             <Route><NotFound /></Route>
           </Switch>
         </AppShell>

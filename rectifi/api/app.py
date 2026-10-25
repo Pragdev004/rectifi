@@ -21,9 +21,11 @@ from starlette.responses import FileResponse, HTMLResponse, PlainTextResponse, R
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from .. import config
 from ..db import init_db
 from .errors import DB_ERRORS, EXCEPTION_HANDLERS
-from .routes import accounts, ask, budgets, imports, insights, meta, overview, phone, review, transactions
+from .routes import (accounts, ask, auth, budgets, charts, chat, classify, imports, insights, knowledge, memory, meta, models,
+                     overview, phone, review, traces, transactions)
 from .security import ApiGuard, BodyLimit, HostGuard, SecurityHeaders, TailscaleLock
 
 log = logging.getLogger("rectifi.api")
@@ -49,7 +51,8 @@ class ImmutableFiles(StaticFiles):
 
 def api_routes() -> list[Route]:
     found = []
-    for module in (meta, overview, review, insights, transactions, imports, budgets, accounts, phone, ask):
+    for module in (meta, overview, review, insights, transactions, imports, budgets, accounts, phone, ask,
+                   classify, charts, chat, memory, traces, models, auth, knowledge):
         found += module.routes
     return found
 
@@ -77,6 +80,7 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
 
     @asynccontextmanager
     async def lifespan(app):
+        config.enforce_langsmith_privacy()          # traces never leave the laptop unless RECTIFI_LANGSMITH=1
         try:
             await run_in_threadpool(init_db)
         except DB_ERRORS:

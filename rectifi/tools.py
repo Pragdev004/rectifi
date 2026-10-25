@@ -14,6 +14,7 @@ import secrets
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from .categorize import FALLBACK_EXPENSE, FALLBACK_INCOME, fallback_name
 from .db import connect
 from .money import D0, PAISE, fmt_inr, parse_amount
 from .parsing import best_effort_sms, classify_sms, parse_sms
@@ -143,7 +144,7 @@ def _categorize(conn, payee: str | None, description: str | None, direction: str
         ).fetchone()
         if row:
             return row["category_id"]
-    fallback = "Other" if direction == "debit" else "Other income"
+    fallback = fallback_name(direction)
     return conn.execute("SELECT id FROM categories WHERE name = %s", (fallback,)).fetchone()["id"]
 
 
@@ -767,8 +768,8 @@ def weekly_review(day: str | date | None = None) -> dict:
         ).fetchall()
         uncategorised = conn.execute(
             """SELECT COUNT(*) AS n FROM transactions t JOIN categories c ON c.id = t.category_id
-               WHERE t.txn_date BETWEEN %s AND %s AND c.name IN ('Other', 'Other income')""",
-            (start, end),
+               WHERE t.txn_date BETWEEN %s AND %s AND c.name IN (%s, %s)""",
+            (start, end, FALLBACK_EXPENSE, FALLBACK_INCOME),
         ).fetchone()["n"]
         unlinked = conn.execute(
             "SELECT COUNT(*) AS n FROM transactions WHERE txn_date BETWEEN %s AND %s AND account_id IS NULL",
@@ -1098,3 +1099,23 @@ def inbox_prefill(item_id: int) -> dict:
     if guess["txn_date"] and guess["txn_date"] > today():
         guess["txn_date"] = None
     return {**guess, "account_id": account_id, "raw_text": item["raw_text"], "inbox_id": item["id"]}
+
+
+# ───────────────────────── next phase: one block per workstream ─────────────────────────
+# Edit only inside your own block. Nothing in this file talks to an LLM (CLAUDE.md rule 5).
+
+# ═══ WS-CLASSIFY: begin ═══
+# apply_classifications, classify job rows, 'sort my Miscellaneous entries again', set_category(source='user') and learned rules.
+# ═══ WS-CLASSIFY: end ═══
+
+# ═══ WS-CHARTS: begin ═══
+# chart_reference_totals, prepared chart frames (integer paise), saved charts list/get/pin/delete.
+# ═══ WS-CHARTS: end ═══
+
+# ═══ WS-CHAT: begin ═══
+# conversations table helpers: list/create/rename/delete threads, search_text, memory page reads.
+# ═══ WS-CHAT: end ═══
+
+# ═══ WS-RAG: begin ═══
+# knowledge documents and chunks: add/list/delete documents, store and read chunk rows.
+# ═══ WS-RAG: end ═══

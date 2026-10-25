@@ -5,7 +5,7 @@ Fixed rules, SQL and Decimal. No model reads your data to produce an insight, an
 so anyone who repeats an insight (the Insights page, the agent, an optional "Explain this") can be checked against it.
 
 The rules, in the order the page ranks them within one severity:
-  data quality   unlinked entries, no bank account, "Other" pile, accounts not checked against the bank, a balance gap
+  data quality   unlinked entries, no bank account, "Miscellaneous" pile, accounts not checked against the bank, a balance gap
   budget pace    month to date x days in month / day of month, per budget (not before day 5)
   spike          this month vs your usual month (average of the last 3 months that have data)
   recurring      the same payee at a similar amount every month: monthly and yearly cost, new ones, price rises
@@ -26,6 +26,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from statistics import median
 
 from . import tools
+from .categorize import FALLBACK_EXPENSE
 from .db import connect
 from .money import fmt_inr
 
@@ -181,13 +182,13 @@ def _data_quality(ctx: Context) -> list[Insight]:
             "no account, so no balance check can cover them. Link them in the Ledger, or import the statement: "
             "an import attaches the account to a matching hand entry.",
             {"unlinked_count": n, "lookback_days": Decimal(QUALITY_LOOKBACK_DAYS)}, "Open the Ledger", "ledger", key="unlinked"))
-    other = [r for r in recent if r["category"] == "Other" and r["direction"] == "debit"]
+    other = [r for r in recent if r["category"] == FALLBACK_EXPENSE and r["direction"] == "debit"]
     if other:
         total = _whole(sum((r["amount"] for r in other), Decimal(0)))
         out.append(Insight(
             "other_pile", "watch" if len(other) >= OTHER_WATCH_COUNT else "info",
-            f"{len(other)} {'payment sits' if len(other) == 1 else 'payments sit'} in “Other” ({_rs(total)})",
-            f"Money in “Other” can't be budgeted or compared. In the last {QUALITY_LOOKBACK_DAYS} days {len(other)} "
+            f"{len(other)} {'payment sits' if len(other) == 1 else 'payments sit'} in “{FALLBACK_EXPENSE}” ({_rs(total)})",
+            f"Money in “{FALLBACK_EXPENSE}” can't be budgeted or compared. In the last {QUALITY_LOOKBACK_DAYS} days {len(other)} "
             f"{'payment' if len(other) == 1 else 'payments'} adding up to {_rs(total)} have no real category. "
             "Give them one in the Ledger: Rectifi learns the payee for next time.",
             {"other_count": Decimal(len(other)), "other_total": total, "lookback_days": Decimal(QUALITY_LOOKBACK_DAYS)},
@@ -515,7 +516,7 @@ def _unbudgeted(ctx: Context) -> list[Insight]:
     budgeted = {b["category"] for b in tools.budget_status(ctx.m0)["categories"]}
     averages = []
     for category in {c for (_, c) in sums}:
-        if category in budgeted or category == "Other":
+        if category in budgeted or category == FALLBACK_EXPENSE:
             continue
         avg = sum((sums.get((m, category), Decimal(0)) for m in prior), Decimal(0)) / len(prior)
         if avg >= UNBUDGETED_MIN_AVERAGE:

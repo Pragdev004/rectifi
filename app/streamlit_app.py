@@ -26,6 +26,7 @@ import streamlit as st  # noqa: E402
 from psycopg_pool import PoolTimeout  # noqa: E402
 from theme import chip, esc, inject_css, tok  # noqa: E402
 
+from rectifi.categorize import FALLBACK_EXPENSE  # noqa: E402
 from rectifi import config, forwarder_config, insights, sms_gateway, tailscale, tools  # noqa: E402
 from rectifi.db import DatabaseUnavailable, init_db  # noqa: E402
 from rectifi.importer import assess_statement, import_rows, normalise, read_table  # noqa: E402
@@ -400,7 +401,7 @@ def page_review():
             if r["uncategorised_count"]:
                 n = r["uncategorised_count"]
                 items.append(f'<div class="brow"><div class="name">{chip("near", "Check")}</div>'
-                             f'<div>{n} {"entry is" if n == 1 else "entries are"} still in “Other”. '
+                             f'<div>{n} {"entry is" if n == 1 else "entries are"} still in “{FALLBACK_EXPENSE}”. '
                              f'Give {"it" if n == 1 else "them"} a real category in the Ledger.</div></div>')
             for b in r["budgets_needing_attention"]:
                 over = b["state"] == "over"

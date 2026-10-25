@@ -205,10 +205,10 @@ def test_overview_survives_a_broken_rule(monkeypatch, assistant_off):
 
 def test_review_shows_only_the_act_level_insights(assistant_off):
     with_unlinked_entry()                                                          # act: unlinked.
-    tools.add_transaction("100", "debit", date.today(), payee="Mystery", account="Main")   # lands in Other: only a watch/info
+    tools.add_transaction("100", "debit", date.today(), payee="Mystery", account="Main")   # lands in Miscellaneous: only a watch/info
     text = page_text(run_page("review"))
     assert "Insights worth acting on" in text and "1 entry is not linked to an account" in text
-    assert "sit in “Other”" not in text and "sits in “Other”" not in text
+    assert "sit in “Miscellaneous”" not in text and "sits in “Miscellaneous”" not in text
 
 
 def test_review_has_no_insights_section_without_act_level_items(assistant_off):
@@ -249,7 +249,7 @@ def test_a_figure_from_the_insights_tool_counts_as_verified():
     tools.add_account("Main", "1234")
     for _ in range(3):
         tools.add_transaction("100", "debit", date.today(), payee="Mystery", account="Main")
-    model = ScriptedModel(script=[call("insights", {}), AIMessage("Three payments, ₹300 in all, sit in Other.")])
+    model = ScriptedModel(script=[call("insights", {}), AIMessage("Three payments, ₹300 in all, sit in Miscellaneous.")])
     new = chat(build_graph(model), "what should I fix?", "i3")
     assert unverified_amounts(new) == []
 

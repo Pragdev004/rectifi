@@ -165,7 +165,8 @@ def test_phone_navigation_and_the_more_sheet(browser, live_server):
     page.get_by_role("button", name="More").click()
     dialog = page.get_by_role("dialog", name="More")
     dialog.wait_for()
-    assert [a.inner_text().strip() for a in dialog.get_by_role("link").all()] == ["Review", "Insights", "Budgets", "Accounts", "Phone"]
+    assert [a.inner_text().strip() for a in dialog.get_by_role("link").all()] == [
+        "Review", "Insights", "Charts", "Budgets", "Accounts", "Phone", "Library", "Memory", "Traces"]
     assert dialog.get_by_label("Dark").count() == 1
     shot(page, "more-sheet-390")
     page.keyboard.press("Escape")

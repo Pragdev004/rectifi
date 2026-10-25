@@ -27,7 +27,7 @@ def seed_two_weeks():
     add("5000", "credit", "2026-10-19", "Stipend", "Salary & Allowance")
     add("700", "debit", "2026-10-19", "Swiggy")
     add("1500", "debit", "2026-10-20", "Amazon")
-    add("300", "debit", "2026-10-21", "Corner shop")  # no rule matches: lands in "Other"
+    add("300", "debit", "2026-10-21", "Corner shop")  # no rule matches: lands in "Miscellaneous"
 
 
 def test_weekly_review():
@@ -60,7 +60,7 @@ def test_weekly_review():
     assert r["spending_change_pct"] == Decimal("150.0")
     assert r["trend"] == "up"
 
-    assert [c["category"] for c in r["top_categories"]] == ["Shopping", "Food & Dining", "Other"]
+    assert [c["category"] for c in r["top_categories"]] == ["Shopping", "Food & Dining", "Miscellaneous"]
     assert [t["amount"] for t in r["biggest_debits"]] == [Decimal("1500.00"), Decimal("700.00"), Decimal("300.00")]
     assert r["biggest_debits"][0]["payee"] == "Amazon"
     assert r["uncategorised_count"] == 1
@@ -169,7 +169,7 @@ def test_all_clear_only_in_the_truly_clean_case():
     assert r["all_clear"]
 
     # each single problem takes it away again
-    add("10", "debit", "2026-10-21", "Corner shop", account="Savings")     # lands in "Other": uncategorised
+    add("10", "debit", "2026-10-21", "Corner shop", account="Savings")     # lands in "Miscellaneous": uncategorised
     assert not tools.weekly_review()["all_clear"]
 
 
