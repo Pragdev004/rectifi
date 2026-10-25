@@ -1,0 +1,24 @@
+.layout { display: grid; gap: var(--s-5); }
+@media (min-width: 1024px) { .layout { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: var(--s-6); align-items: start; } }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-3); }
+.list { list-style: none; margin: 0; padding: 0; }
+.runBtn {
+  width: 100%; min-height: 56px; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--c-rule); color: inherit; font: inherit;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--s-1) var(--s-3); align-items: center; padding: var(--s-2) var(--s-2); cursor: pointer;
+}
+.runBtn:hover { background: var(--c-sunk); }
+.runBtn[aria-current="true"] { background: var(--c-accent-tint); box-shadow: inset 3px 0 0 var(--c-accent); }
+.time, .ms { font-family: var(--font-figures); font-size: var(--t-xs); line-height: var(--t-xs-lh); color: var(--c-muted); }
+.what { min-width: 0; display: grid; gap: 2px; }
+.what strong { font-weight: 600; }
+.what span { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree { list-style: none; margin: 0; padding: 0; }
+.span { border-bottom: 1px solid var(--c-rule); padding: var(--s-2) 0 var(--s-2) calc(var(--depth, 0) * 16px); }
+.spanHead { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.spanName { font-weight: 600; overflow-wrap: anywhere; }
+.model { font-family: var(--font-figures); font-size: var(--t-xs); color: var(--c-muted); }
+.preview { margin: var(--s-1) 0 0; padding: var(--s-2) var(--s-3); background: var(--c-sunk); border-radius: var(--r-2); font-family: var(--font-figures); font-size: 0.8125rem; line-height: 1.25rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14rem; overflow: auto; }
+.label { font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-muted); margin: var(--s-2) 0 0; }
+.err { color: var(--c-over); font-size: var(--t-sm); margin: var(--s-1) 0 0; overflow-wrap: anywhere; }
+.muted { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); margin: 0; }
+.panel { min-width: 0; }
