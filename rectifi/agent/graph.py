@@ -13,6 +13,7 @@ import re
 from datetime import date
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import BaseTool, BaseToolkit
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 
@@ -23,6 +24,18 @@ from ..parsing import AMOUNT, parse_sms
 from ..privacy import mask_sensitive
 from .llm import get_llm
 from .tools import AGENT_TOOLS, TOOLS_BY_NAME
+
+# The tools that only READ. The knowledge graph's "tools" route gets exactly these and nothing else, so a write (log, budget,
+# recategorize, commitment) is impossible there: the model is never shown a write tool and the ToolNode has none to run.
+READ_ONLY_NAMES = ("spending_report", "find_transactions", "check_budgets", "weekly_review", "insights", "list_categories")
+READ_ONLY_TOOLS = [TOOLS_BY_NAME[n] for n in READ_ONLY_NAMES]
+
+
+class RectifiReadOnlyToolkit(BaseToolkit):
+    """A LangChain toolkit: a named group of tools handed to an agent together. This one holds the read-only tools."""
+
+    def get_tools(self) -> list[BaseTool]:
+        return list(READ_ONLY_TOOLS)
 
 HISTORY_TURNS = 8        # how many recent user turns the model sees (keeps cost flat as chats grow)
 GUARD_LOOKBACK = 3       # an amount may come from any of the user's last N messages (clarification flows)
@@ -169,8 +182,11 @@ def unverified_amounts(messages: list) -> list:
     return odd
 
 
-def build_graph(llm=None, checkpointer=None):
-    model = (llm or get_llm()).bind_tools(AGENT_TOOLS)
+def build_graph(llm=None, checkpointer=None, tools=None):
+    """`tools` defaults to every agent tool. Pass a smaller list (for example READ_ONLY_TOOLS) to build a more limited agent."""
+    chosen = list(tools) if tools is not None else AGENT_TOOLS
+    by_name = {t.name: t for t in chosen}
+    model = (llm or get_llm()).bind_tools(chosen)
 
     def agent(state: MessagesState):
         window = [_masked(m) for m in _recent_window(state["messages"])]
@@ -194,7 +210,7 @@ def build_graph(llm=None, checkpointer=None):
             if refusal:
                 results.append(ToolMessage(refusal, tool_call_id=call["id"], name=call["name"], status="error"))
                 continue
-            tool = TOOLS_BY_NAME.get(call["name"])
+            tool = by_name.get(call["name"])
             if tool is None:
                 results.append(ToolMessage(f"Unknown tool {call['name']}", tool_call_id=call["id"], name=call["name"], status="error"))
                 continue
