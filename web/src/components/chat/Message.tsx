@@ -142,7 +142,7 @@ export function AssistantTurn({
 export function LiveTurn({ live }: { live: Live }) {
   const secs = useElapsed(live.startedAt);
   return (
-    <div className={c.turn} data-role="assistant" data-testid="ask-working">
+    <div className={c.turn} data-role="assistant-live" data-testid="ask-working">
       <div className={c.meta}><Eyebrow>Rectifi</Eyebrow></div>
       {live.text && <Markdown text={live.text} className={c.md} />}
       <div className={c.working} role="status" aria-live="polite">

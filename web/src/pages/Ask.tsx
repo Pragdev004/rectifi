@@ -102,6 +102,7 @@ function Conversation({ threadId, onCreated, status }: { threadId: string | null
       await start((ev) => {
         if (ev.type === "done") {
           finished = true;
+          setLive(null);                    // same render as the final items: the streamed text never shows twice
           setItems(ev.items);
           setAlts(ev.alternatives);
           setInterrupt(ev.pending_interrupt);
