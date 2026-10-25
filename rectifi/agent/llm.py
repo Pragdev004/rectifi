@@ -314,10 +314,10 @@ def _advice(code: int | None, message: str, provider: str) -> str | None:
             wanted = named.group(1) if named else config.role_model("chat")
             return f"Ollama doesn't have the model {wanted!r} (HTTP 404). Run `ollama pull {wanted}`, then try again."
         extra = " " + _FREE_MODELS_HINT if provider == "openrouter" else ""
-        if "tool" in low:
-            return "This model can't be used with tool calling (HTTP 404), and the Ask page needs that. Pick another model." + extra
         if _NOT_FOUND_WORDS.search(message):
             return "The provider doesn't know this model id (HTTP 404). Check the spelling in .env and restart the app." + extra
+        if re.search(r"\btools?[ _]?(use|call|support)|tool[- ]calling|function call", low):
+            return "This model can't be used with tool calling (HTTP 404), and the Ask page needs that. Pick another model." + extra
         return ("The provider says this model isn't available for tool calling (HTTP 404). Either the id is wrong or the model "
                 "can't call tools. Pick another model." + extra)
     if code == 429:
