@@ -173,5 +173,33 @@ def review(r: dict) -> dict:
 # ═══ WS-CHAT: end ═══
 
 # ═══ WS-RAG: begin ═══
-# wire shapes for knowledge documents, citations and the RAG trace.
+# Wire shapes for knowledge documents, citations and the RAG trace. No money maths: a ₹ figure in an answer is already text.
+
+SECTION_LABELS = {"guide": "GUIDE", "note": "YOUR NOTE", "txn": "YOUR ENTRY", "upload": "YOUR FILE", "web": "WEB", "tool": "YOUR NUMBERS"}
+
+
+def knowledge_doc(d: dict) -> dict:
+    """A library document row. Built-in guides are listed with id None until the first index has stored them."""
+    return {"id": d.get("id"), "corpus": d["corpus"], "label": SECTION_LABELS.get(d["corpus"], "FILE"), "title": d["title"], "source": d["source"],
+            "chunks": int(d.get("chunks") or 0), "created_at": d.get("created_at"), "builtin": d["corpus"] == "guide",
+            "indexed": bool(d.get("chunks"))}
+
+
+def knowledge_status(status: dict, job: dict, guides_on_disk: int) -> dict:
+    return {"embed_model": status["embed_model"], "chunks": status["chunks"], "chunks_total": status["chunks_total"],
+            "documents": status["documents"], "transactions": status["transactions"], "other_model_chunks": status["other_model_chunks"],
+            "updated_at": status["updated_at"], "guides_on_disk": guides_on_disk, "job": job}
+
+
+def citation(c: dict) -> dict:
+    return {"n": c.get("n"), "source": c.get("source", ""), "title": c.get("title", ""), "chunk": c.get("chunk", 0), "quote": c.get("quote", ""),
+            "corpus": c.get("corpus", "guide"), "label": c.get("label") or SECTION_LABELS.get(c.get("corpus", ""), "SOURCE")}
+
+
+def rag_answer(out: dict) -> dict:
+    """RagOutput as the chat window draws it: answer, citations, the 'How this answer was checked' list, and the verdicts."""
+    return {"answer": out.get("answer", ""), "citations": [citation(c) for c in out.get("citations", [])],
+            "trace": [{"step": e["step"], "verdict": e["verdict"], "detail": e.get("detail", "")} for e in out.get("trace", [])],
+            "unverified": list(out.get("unverified", [])), "support": out.get("support"), "useful": out.get("useful"),
+            "route": out.get("route"), "mode": out.get("mode"), "abstained": bool(out.get("abstained"))}
 # ═══ WS-RAG: end ═══
