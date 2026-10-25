@@ -13,6 +13,7 @@ import re
 import secrets
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 
 from .categorize import FALLBACK_EXPENSE, FALLBACK_INCOME, fallback_name
 from .db import connect
@@ -1117,5 +1118,161 @@ def inbox_prefill(item_id: int) -> dict:
 # ═══ WS-CHAT: end ═══
 
 # ═══ WS-RAG: begin ═══
-# knowledge documents and chunks: add/list/delete documents, store and read chunk rows.
+# Knowledge documents and the rows the knowledge loaders read. Plain SQL and plain text: no model, no embeddings here.
+# The vector maths and the chunk rows' embeddings live in rectifi/rag/ (it may load langchain; this file may not).
+
+KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"      # the built-in guides, shipped with Rectifi
+RAG_CORPORA = ("guide", "note", "upload", "txn")
+RAG_UPLOAD_EXTENSIONS = (".md", ".txt")
+RAG_UPLOAD_MAX = 300 * 1024            # characters-ish: a note or a guide, not a book
+RAG_TITLE_MAX = 120
+
+_STATEMENT_DATE = re.compile(r"\b(?:\d{1,2}[-/ ](?:\d{1,2}|[A-Za-z]{3,9})[-/ ]\d{2,4}|\d{4}-\d{2}-\d{2})\b")
+_STATEMENT_AMOUNT = re.compile(r"\d[\d,]*\.\d{2}\b")
+_STATEMENT_HEADER = re.compile(
+    r"(?i)(opening balance|closing balance|withdrawal amt|deposit amt|value d(?:t|ate)|chq\.?\s*/?\s*ref|statement of account|"
+    r"running balance|txn date|transaction date)")
+
+
+def rag_looks_like_statement(text: str) -> bool:
+    """True when a text looks like a bank statement: several lines that each have a date and an amount, or statement column
+    headings. Statements belong in Add > Import (which proves them against the balance), never in the knowledge library."""
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    rowlike = sum(1 for line in lines if _STATEMENT_DATE.search(line) and _STATEMENT_AMOUNT.search(line))
+    headers = {m.group(0).lower().replace(" ", "") for m in _STATEMENT_HEADER.finditer(text or "")}
+    return rowlike >= 5 or (len(headers) >= 2 and rowlike >= 2) or len(headers) >= 3
+
+
+def _title_of(text: str, fallback: str) -> str:
+    for line in (text or "").splitlines():
+        stripped = line.strip().lstrip("#").strip()
+        if stripped:
+            return stripped[:RAG_TITLE_MAX]
+    return fallback[:RAG_TITLE_MAX]
+
+
+def rag_check_upload(filename: str, data: bytes) -> tuple[str, str, str]:
+    """Check a file someone added to the library. Returns (source, title, text) or raises RectifiError with a plain reason.
+    Only .md and .txt are accepted. A bank statement (or anything that looks like one) is refused."""
+    name = Path(filename or "").name.strip()
+    if not name:
+        raise RectifiError("Choose a file to add.")
+    if not name.lower().endswith(RAG_UPLOAD_EXTENSIONS):
+        raise RectifiError("The library takes notes as .md or .txt files. Bank statements go in Add, then Import, where Rectifi checks them against your balance.")
+    if len(data) > RAG_UPLOAD_MAX:
+        raise RectifiError(f"That file is too long for the library (the limit is {RAG_UPLOAD_MAX // 1024} KB of text).")
+    if b"\x00" in data:
+        raise RectifiError("That doesn't look like a text file.")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise RectifiError("That file isn't UTF-8 text. Save it as plain UTF-8 and add it again.") from None
+    text = text.strip()
+    if not text:
+        raise RectifiError("That file is empty.")
+    if rag_looks_like_statement(text):
+        raise RectifiError("That looks like a bank statement. Add statements in Add, then Import, so Rectifi can check them against your balance. The library is for your own notes.")
+    return name, _title_of(text, Path(name).stem), text
+
+
+def rag_guide_files() -> list[dict]:
+    """The built-in guides on disk, sorted by file name: [{source, title, content, sha256}]. source is 'guides/<file>.md'."""
+    out = []
+    for path in sorted(KNOWLEDGE_DIR.glob("*.md")):
+        text = path.read_text(encoding="utf-8").strip()
+        out.append({"source": f"guides/{path.name}", "title": _title_of(text, path.stem), "content": text,
+                    "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()})
+    return out
+
+
+def rag_upsert_document(corpus: str, source: str, title: str, content: str) -> dict:
+    """Add or replace one library document. Returns {id, changed}: changed is False when the same text was already stored."""
+    if corpus not in ("guide", "note", "upload"):
+        raise RectifiError(f"Unknown library section {corpus!r}.")
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    with connect() as conn:
+        row = conn.execute("SELECT id, sha256 FROM rag_documents WHERE corpus = %s AND source = %s", (corpus, source)).fetchone()
+        if row and row["sha256"] == digest:
+            conn.execute("UPDATE rag_documents SET title = %s WHERE id = %s", (title[:RAG_TITLE_MAX], row["id"]))
+            return {"id": row["id"], "changed": False}
+        if row:
+            conn.execute("UPDATE rag_documents SET title = %s, sha256 = %s, content = %s WHERE id = %s",
+                         (title[:RAG_TITLE_MAX], digest, content, row["id"]))
+            return {"id": row["id"], "changed": True}
+        new = conn.execute(
+            "INSERT INTO rag_documents (corpus, title, source, sha256, content) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (corpus, title[:RAG_TITLE_MAX], source, digest, content)).fetchone()
+        return {"id": new["id"], "changed": True}
+
+
+def rag_list_documents(corpus: str | None = None) -> list[dict]:
+    """Library documents with how many chunks each has (any embedding model). Newest first within a section."""
+    with connect() as conn:
+        return conn.execute(
+            """SELECT d.id, d.corpus, d.title, d.source, d.created_at, d.sha256,
+                      (SELECT COUNT(*) FROM rag_chunks c WHERE c.document_id = d.id) AS chunks
+               FROM rag_documents d WHERE (%s::text IS NULL OR d.corpus = %s)
+               ORDER BY d.corpus, d.created_at DESC, d.id DESC""", (corpus, corpus)).fetchall()
+
+
+def rag_get_document(doc_id: int) -> dict | None:
+    with connect() as conn:
+        return conn.execute("SELECT id, corpus, title, source, content, sha256, created_at FROM rag_documents WHERE id = %s", (doc_id,)).fetchone()
+
+
+def rag_delete_document(doc_id: int, *, corpus: str | None = None) -> bool:
+    """Remove a document and (by ON DELETE CASCADE) its chunks. Pass corpus to be sure a guide is never deleted by an upload route."""
+    with connect() as conn:
+        return conn.execute("DELETE FROM rag_documents WHERE id = %s AND (%s::text IS NULL OR corpus = %s)",
+                            (doc_id, corpus, corpus)).rowcount > 0
+
+
+def rag_delete_missing(corpus: str, keep_sources: list[str]) -> int:
+    """Delete documents of one section whose source is no longer in keep_sources (a note that was removed, a guide renamed)."""
+    with connect() as conn:
+        return conn.execute("DELETE FROM rag_documents WHERE corpus = %s AND NOT (source = ANY(%s))", (corpus, list(keep_sources))).rowcount
+
+
+def rag_note_rows() -> list[dict]:
+    """The person's own words: each weekly commitment and each transaction note, as [{source, title, content}].
+    This is the user's text, so a rupee figure in it counts as typed by the user."""
+    out = []
+    with connect() as conn:
+        for r in conn.execute("SELECT week_start, commitment FROM weekly_reviews ORDER BY week_start").fetchall():
+            out.append({"source": f"commitment:{r['week_start']}", "title": f"Weekly commitment, week of {r['week_start']}",
+                        "content": f"Weekly commitment for the week starting {r['week_start']}: {r['commitment']}"})
+        for r in conn.execute(
+                "SELECT id, txn_date, payee, description, note FROM transactions WHERE note IS NOT NULL AND btrim(note) <> '' ORDER BY id").fetchall():
+            who = r["payee"] or r["description"] or "a payment"
+            out.append({"source": f"txn-note:{r['id']}", "title": f"Note on {who}, {r['txn_date']}",
+                        "content": f"Note on {who} ({r['txn_date']}): {r['note'].strip()}"})
+    return out
+
+
+def rag_txn_rows(after_id: int = 0, limit: int | None = None) -> list[dict]:
+    """Transactions in id order for the knowledge loader: id, txn_date, amount (Decimal), direction, payee, description, note,
+    category. The loader writes the sentence and masks it; this function only reads."""
+    sql = """SELECT t.id, t.txn_date, t.amount, t.direction, t.payee, t.description, t.note, c.name AS category
+             FROM transactions t LEFT JOIN categories c ON c.id = t.category_id WHERE t.id > %s ORDER BY t.id"""
+    params: list = [after_id]
+    if limit:
+        sql += " LIMIT %s"
+        params.append(limit)
+    with connect() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def rag_status(embed_model: str) -> dict:
+    """What the library has indexed with this embedding model: chunks per section, documents, the newest chunk's time, and
+    how many chunks were made with some other model (they are ignored until a re-index)."""
+    with connect() as conn:
+        chunks = {r["corpus"]: r["n"] for r in conn.execute(
+            "SELECT corpus, COUNT(*) AS n FROM rag_chunks WHERE embed_model = %s GROUP BY corpus", (embed_model,)).fetchall()}
+        other = conn.execute("SELECT COUNT(*) AS n FROM rag_chunks WHERE embed_model <> %s", (embed_model,)).fetchone()["n"]
+        newest = conn.execute("SELECT max(created_at) AS t FROM rag_chunks WHERE embed_model = %s", (embed_model,)).fetchone()["t"]
+        docs = {r["corpus"]: r["n"] for r in conn.execute("SELECT corpus, COUNT(*) AS n FROM rag_documents GROUP BY corpus").fetchall()}
+        txns = conn.execute("SELECT COUNT(*) AS n FROM transactions").fetchone()["n"]
+    return {"embed_model": embed_model, "chunks": {c: chunks.get(c, 0) for c in RAG_CORPORA}, "chunks_total": sum(chunks.values()),
+            "documents": {c: docs.get(c, 0) for c in ("guide", "note", "upload")}, "transactions": txns,
+            "other_model_chunks": other, "updated_at": newest}
 # ═══ WS-RAG: end ═══
