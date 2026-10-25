@@ -1,0 +1,9 @@
+.editor { display: flex; gap: var(--s-2); align-items: flex-start; flex-wrap: wrap; margin-top: var(--s-2); }
+.editor > :first-child { flex: 0 1 12rem; }
+.newList { display: grid; }
+.newRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s-2); padding: var(--s-3) 0; border-bottom: 1px solid var(--c-rule); align-items: start; }
+.newName { grid-column: 1 / -1; font-weight: 500; align-self: center; }
+@media (min-width: 640px) {
+  .newRow { grid-template-columns: minmax(8rem, 1fr) 12rem auto; gap: var(--s-4); }
+  .newName { grid-column: auto; }
+}

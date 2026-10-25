@@ -1,0 +1,16 @@
+/* Layout helpers shared by the pages */
+.twoCol { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: var(--s-8); margin-top: var(--s-7); align-items: start; }
+.col { min-width: 0; }
+.col > section:first-child { margin-top: 0; }
+.stack { display: grid; gap: var(--s-6); margin-top: var(--s-6); }
+.moreLink { display: inline-flex; align-items: center; gap: var(--s-1); min-height: 44px; margin-top: var(--s-1); }
+.muted { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); }
+.proofName { font-weight: 600; margin: var(--s-4) 0 var(--s-2); }
+.proofName:first-of-type { margin-top: 0; }
+.skelStack { display: grid; gap: var(--s-4); }
+.row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+@media (max-width: 1023.98px) {
+  .twoCol { display: block; margin-top: 0; }
+  .col > section:first-child { margin-top: var(--s-6); }
+}
+.spaced { margin-bottom: var(--s-5); }

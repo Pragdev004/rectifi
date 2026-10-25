@@ -1,0 +1,24 @@
+.stepper { display: inline-flex; align-items: center; gap: 0; }
+.pick { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.pick select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 44px;
+  padding: 0 28px 0 var(--s-2);
+  border: 0;
+  background: transparent;
+  color: var(--c-text);
+  font-weight: 600;
+  font-size: 1rem;
+  text-align: center;
+  text-align-last: center;
+  border-radius: var(--r-2);
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+.pick select:hover { background: var(--c-sunk); }
+.pick .caret { position: absolute; right: 8px; pointer-events: none; color: var(--c-muted); }
+@media (max-width: 1023.98px) {
+  .pick select { font-size: 0.9375rem; padding-right: 24px; }
+  .pick .caret { right: 6px; }
+}

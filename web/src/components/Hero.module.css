@@ -1,0 +1,36 @@
+.hero {
+  display: grid;
+  gap: var(--s-5);
+  padding-bottom: var(--s-5);
+  border-bottom: 1px solid var(--c-rule);
+}
+.numeral {
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+  font-weight: 600;
+  font-size: var(--t-hero);
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  font-variant-numeric: lining-nums tabular-nums;
+  margin-top: var(--s-2);
+}
+.numeral small { font-size: 0.38em; color: var(--c-muted); font-weight: 500; letter-spacing: 0; margin-left: 0.08em; }
+.caption { margin-top: var(--s-2); color: var(--c-muted); max-width: 26rem; }
+.cells { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* A label that wraps (SAVINGS RATE on a phone) must not push its figure out of line with the others. */
+@supports (grid-template-rows: subgrid) {
+  .cells { grid-template-rows: auto auto; }
+  .cell { display: grid; grid-row: span 2; grid-template-rows: subgrid; row-gap: 0; align-content: start; }
+}
+.cell { padding: 0 var(--s-3); border-left: 1px solid var(--c-rule); min-width: 0; }
+.cell:first-child { border-left: 0; padding-left: 0; }
+.cell dt { margin-bottom: var(--s-1); }
+.cell dd { margin: 0; font-size: 1.0625rem; line-height: 1.5rem; font-weight: 500; }
+.short { display: block; font-size: var(--t-xs); line-height: var(--t-xs-lh); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-over); }
+@media (min-width: 640px) {
+  .cell dd { font-size: 1.375rem; line-height: 1.75rem; }
+}
+@media (min-width: 1024px) {
+  .hero { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); align-items: end; gap: var(--s-6); }
+  .cell { padding: 0 var(--s-5); }
+}

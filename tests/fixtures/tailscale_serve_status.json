@@ -1,0 +1,7 @@
+{
+  "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}},
+  "Web": {
+    "prag-laptop.tail1a2b3.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8501"}}},
+    "prag-laptop.tail1a2b3.ts.net:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8765"}}}
+  }
+}

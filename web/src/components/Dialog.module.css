@@ -1,0 +1,58 @@
+.dialog {
+  padding: 0;
+  border: 0;
+  background: var(--c-raised);
+  color: var(--c-text);
+  box-shadow: var(--shadow-overlay);
+  max-width: min(32rem, calc(100vw - 2 * var(--s-4)));
+  width: 100%;
+  max-height: calc(100dvh - 2 * var(--s-5));
+  border-radius: var(--r-3);
+  overflow: hidden;
+  animation: dialogIn var(--d-base) var(--ease-out);
+}
+.dialog::backdrop {
+  background: var(--c-overlay);
+  animation: fadeIn var(--d-base) var(--ease-out);
+}
+.dialog[data-closing="true"] { animation: dialogOut var(--d-exit) var(--ease-in) forwards; }
+.dialog[data-closing="true"]::backdrop { animation: fadeOut var(--d-exit) var(--ease-in) forwards; }
+
+.inner { display: flex; flex-direction: column; max-height: inherit; }
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-2) var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--c-rule);
+}
+.head h2 { font-size: var(--t-lg); line-height: var(--t-lg-lh); }
+.body { padding: var(--s-5); overflow-y: auto; overscroll-behavior: contain; }
+.foot { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-3) var(--s-5) var(--s-5); }
+
+/* The sheet comes up from the bottom on a phone and sits in the middle on a laptop. */
+@media (max-width: 1023.98px) {
+  .dialog.sheet {
+    max-width: none;
+    width: 100%;
+    margin: auto 0 0;
+    border-radius: var(--r-3) var(--r-3) 0 0;
+    max-height: 88dvh;
+    animation: sheetIn var(--d-slow) var(--ease-out);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .dialog.sheet::backdrop { animation: fadeIn var(--d-base) var(--ease-out); }
+  .dialog.sheet[data-closing="true"] { animation: sheetOut var(--d-exit) var(--ease-in) forwards; }
+}
+
+@keyframes dialogIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+@keyframes dialogOut { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.98); } }
+@keyframes sheetIn { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes sheetOut { from { transform: translateY(0); } to { transform: translateY(100%); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog, .dialog::backdrop, .dialog.sheet { animation: none !important; }
+}

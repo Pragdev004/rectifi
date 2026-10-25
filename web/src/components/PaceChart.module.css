@@ -1,0 +1,37 @@
+.figure { margin: 0; position: relative; }
+.svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: pan-y; }
+.grid { stroke: var(--c-rule); stroke-width: 1; }
+.tickLabel { fill: var(--c-muted); font-family: var(--font-figures); font-size: 11px; }
+.axisLabel { fill: var(--c-muted); font-family: var(--font-body); font-size: 11px; }
+.you { fill: none; stroke: var(--c-accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.pace { fill: none; stroke: var(--c-muted); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.endLabel { font-family: var(--font-body); font-size: 12px; font-weight: 600; }
+.endYou { fill: var(--c-accent); }
+.endPace { fill: var(--c-muted); }
+.cross { stroke: var(--c-text); stroke-opacity: 0.4; stroke-width: 1; }
+.dot { stroke: var(--c-bg); stroke-width: 2; }
+.dotYou { fill: var(--c-accent); }
+.dotPace { fill: var(--c-muted); }
+.tip {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  pointer-events: none;
+  min-width: 9rem;
+  padding: var(--s-2) var(--s-3);
+  background: var(--c-raised);
+  border: 1px solid var(--c-rule-strong);
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow-overlay);
+  font-size: var(--t-sm);
+  line-height: var(--t-sm-lh);
+  transform: translateX(-50%);
+}
+.tip p { display: flex; justify-content: space-between; gap: var(--s-3); }
+.tip .when { font-weight: 600; margin-bottom: 2px; }
+.caption { margin-top: var(--s-2); font-size: var(--t-sm); line-height: var(--t-sm-lh); color: var(--c-muted); }
+.table { width: 100%; font-size: var(--t-sm); }
+.table th, .table td { padding: var(--s-1) var(--s-2); border-bottom: 1px solid var(--c-rule); text-align: right; }
+.table th:first-child, .table td:first-child { text-align: left; }
+.table thead th { color: var(--c-muted); font-weight: 600; }
+.tableWrap { max-height: 16rem; overflow: auto; }

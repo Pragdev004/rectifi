@@ -1,0 +1,36 @@
+# secrets and local settings
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Streamlit local state
+.streamlit/secrets.toml
+
+# Your real bank files must never be committed
+statements/
+*.csv
+*.xls
+*.xlsx
+*.pdf
+# ...except the fake files the tests use
+!tests/fixtures/
+!tests/fixtures/*.csv
+!tests/fixtures/*.pdf
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# The web app: Node packages and build caches stay out; web/dist (the built app) and web/public ARE committed
+web/node_modules/
+web/*.tsbuildinfo
+web/node_modules/.vite/
+web/test-results/

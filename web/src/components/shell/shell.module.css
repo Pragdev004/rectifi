@@ -1,0 +1,187 @@
+.skip {
+  position: fixed;
+  top: var(--s-2);
+  left: var(--s-2);
+  z-index: 100;
+  padding: var(--s-3) var(--s-4);
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  border-radius: var(--r-2);
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.skip:focus { transform: none; }
+
+.shell { min-height: 100dvh; }
+.column { min-width: 0; }
+
+/* ── sidebar (laptop) ── */
+.sidebar {
+  display: none;
+}
+.main {
+  padding: var(--s-4) var(--s-4) calc(var(--bottomnav-h) + env(safe-area-inset-bottom) + var(--s-6));
+  max-width: 720px;
+  margin: 0 auto;
+  outline: none;
+}
+
+@media (min-width: 1024px) {
+  .shell { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); }
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    padding: var(--s-5) var(--s-4) var(--s-4);
+    border-right: 1px solid var(--c-rule);
+    overflow-y: auto;
+  }
+  .main { padding: var(--s-7) var(--s-7) var(--s-8); max-width: 1176px; margin: 0; }
+}
+
+.brand { padding: 0 var(--s-2); margin-bottom: var(--s-5); }
+.wordmark { display: inline-flex; align-items: center; min-height: 44px; font-family: var(--font-display); font-weight: 600; font-size: 1.5rem; line-height: 2rem; letter-spacing: -0.01em; color: var(--c-text); text-decoration: none; }
+.tagline { font-size: var(--t-sm); line-height: var(--t-sm-lh); color: var(--c-muted); }
+.addBtn { margin-bottom: var(--s-5); }
+.nav { display: grid; gap: var(--s-5); }
+.group h2 { padding: 0 var(--s-2); margin-bottom: var(--s-1); }
+.link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 44px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-2);
+  color: var(--c-text);
+  text-decoration: none;
+  font-weight: 500;
+  transition: background-color var(--d-fast) var(--ease-out);
+}
+.link:hover { background: var(--c-sunk); }
+.link[aria-current="page"] { background: var(--c-accent-tint); font-weight: 600; }
+.link[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  background: var(--c-accent);
+  border-radius: 0 2px 2px 0;
+}
+.link svg { flex: none; color: var(--c-muted); }
+.link[aria-current="page"] svg { color: var(--c-accent); }
+.sideFoot { margin-top: auto; padding-top: var(--s-5); display: grid; gap: var(--s-3); }
+.modelLine { font-size: var(--t-xs); line-height: var(--t-xs-lh); color: var(--c-muted); padding: 0 var(--s-1); overflow-wrap: anywhere; }
+.themeLabel { padding: 0 var(--s-1); margin-bottom: var(--s-1); display: block; }
+
+/* ── top bar (phone) ── */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  min-height: var(--topbar-h);
+  padding: 0 var(--s-2) 0 var(--s-4);
+  padding-top: env(safe-area-inset-top);
+  background: var(--c-bg);
+  border-bottom: 1px solid var(--c-rule);
+}
+.topTitle { font-family: var(--font-display); font-weight: 500; font-size: var(--t-lg); line-height: var(--t-lg-lh); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topSlot { display: flex; align-items: center; gap: var(--s-1); min-width: 0; }
+
+/* ── bottom nav (phone) ── */
+.bottomnav {
+  position: fixed;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--bottomnav-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--c-bg);
+  border-top: 1px solid var(--c-rule);
+}
+.bottomnav ul { display: grid; grid-template-columns: repeat(5, 1fr); height: var(--bottomnav-h); }
+.bottomnav li { display: flex; }
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-muted);
+  font-size: var(--t-xs);
+  line-height: var(--t-xs-lh);
+  font-weight: 500;
+  text-decoration: none;
+}
+.tab[aria-current="page"] { color: var(--c-accent); font-weight: 600; }
+.tab[aria-current="page"] svg { stroke-width: 2; }
+.addTab { color: var(--c-on-accent); }
+.addTab > span:first-child {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 56px;
+  height: 52px;
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  border-radius: var(--r-2);
+  font-weight: 600;
+}
+.addTab[aria-current="page"] { color: var(--c-on-accent); }
+@media (max-width: 1023.98px) {
+  /* Hidden while typing. It comes back 400 ms after the field loses focus, never at once: a tap on "Save" blurs the field
+     on its way down, and a bar that popped back under the finger would take the click. */
+  .bottomnav { transition: visibility 0s linear 400ms; }
+  body:has(input:not([type="checkbox"], [type="radio"]):focus, textarea:focus, select:focus) .bottomnav { visibility: hidden; transition-delay: 0s; }
+}
+
+/* ── more sheet ── */
+.moreList { display: grid; }
+.moreList .link { min-height: 52px; border-radius: 0; border-bottom: 1px solid var(--c-rule); padding: 0 var(--s-1); }
+.moreList .link[aria-current="page"]::before { display: none; }
+.moreTheme { margin-top: var(--s-5); display: grid; gap: var(--s-2); }
+
+/* ── offline banner ── */
+.offline {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  padding: var(--s-2) var(--s-4);
+  background: var(--c-over-bg);
+  color: var(--c-over);
+  border-bottom: 1px solid var(--c-over);
+  font-size: var(--t-sm);
+  line-height: var(--t-sm-lh);
+}
+.offline p { flex: 1 1 16rem; font-weight: 500; }
+@media (min-width: 1024px) {
+  .offline { top: 0; padding: var(--s-2) var(--s-7); }
+}
+
+/* last, so it wins over the phone rules above */
+@media (min-width: 1024px) {
+  .topbar, .bottomnav { display: none; }
+}

@@ -1,0 +1,21 @@
+.page { display: grid; gap: var(--s-6); max-width: 44rem; }
+.page > section { margin-top: 0; }
+.line { display: flex; gap: var(--s-3); align-items: baseline; flex-wrap: wrap; margin-bottom: var(--s-2); }
+.line > span:last-child { flex: 1 1 18rem; min-width: 0; }
+.muted { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); margin-top: var(--s-2); }
+.row { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
+.pairForm { display: grid; gap: var(--s-3); max-width: 26rem; }
+.panel { display: grid; gap: var(--s-4); margin-top: var(--s-5); padding: var(--s-4); background: var(--c-raised); border: 1px solid var(--c-rule); border-radius: var(--r-2); }
+.panelTitle { font-size: var(--t-lg); line-height: var(--t-lg-lh); font-weight: 500; }
+.steps { margin: 0; padding-left: 1.4rem; display: grid; gap: var(--s-2); }
+.testBox { display: grid; gap: var(--s-3); }
+.result { margin-top: var(--s-1); }
+.manual { display: grid; gap: var(--s-3); }
+.devices, .inbox, .know { list-style: none; margin: 0; padding: 0; display: grid; }
+.device { display: grid; gap: var(--s-1); justify-items: start; padding: var(--s-3) 0; border-bottom: 1px solid var(--c-rule); }
+.deviceMain { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; }
+.deviceName { font-weight: 600; }
+.inboxItem { display: grid; gap: var(--s-2); padding: var(--s-4) 0; border-bottom: 1px solid var(--c-rule); justify-items: start; }
+.raw { margin: 0; padding: var(--s-3); width: 100%; background: var(--c-sunk); border-radius: var(--r-1); font-family: var(--font-figures); font-size: var(--t-sm); line-height: var(--t-sm-lh); white-space: pre-wrap; overflow-wrap: anywhere; }
+.know { gap: var(--s-3); list-style: disc; padding-left: 1.2rem; }
+.page section > p + div, .page section > div + p, .page section > p + p { margin-top: var(--s-3); }

@@ -1,0 +1,5 @@
+.money { white-space: nowrap; }
+.paise { font-size: 0.85em; color: var(--c-muted); }
+.credit { color: var(--c-ok); }
+.over { color: var(--c-over); }
+.muted { color: var(--c-muted); }

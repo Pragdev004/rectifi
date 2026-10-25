@@ -1,0 +1,27 @@
+{
+  "Version": "1.78.1-t0b3c5d6e7",
+  "TUN": true,
+  "BackendState": "Running",
+  "HaveNodeKey": true,
+  "AuthURL": "",
+  "TailscaleIPs": ["100.101.102.103", "fd7a:115c:a1e0::1234:5678"],
+  "Self": {
+    "ID": "nExampleCNTRL",
+    "HostName": "prag-laptop",
+    "DNSName": "prag-laptop.tail1a2b3.ts.net.",
+    "OS": "windows",
+    "TailscaleIPs": ["100.101.102.103", "fd7a:115c:a1e0::1234:5678"],
+    "Online": true
+  },
+  "MagicDNSSuffix": "tail1a2b3.ts.net",
+  "CurrentTailnet": {"Name": "pragadeesh4406@gmail.com", "MagicDNSSuffix": "tail1a2b3.ts.net", "MagicDNSEnabled": true},
+  "CertDomains": ["prag-laptop.tail1a2b3.ts.net"],
+  "Peer": {
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000001": {
+      "HostName": "prag-phone",
+      "DNSName": "prag-phone.tail1a2b3.ts.net.",
+      "OS": "android",
+      "Online": true
+    }
+  }
+}

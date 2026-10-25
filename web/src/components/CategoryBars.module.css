@@ -1,0 +1,6 @@
+.list { display: grid; gap: var(--s-3); }
+.head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-3); }
+.cat { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.track { height: 8px; margin: var(--s-1) 0; background: var(--c-rule); border-radius: 4px; overflow: hidden; }
+.fill { height: 100%; background: var(--c-accent); border-radius: 4px; }
+.sub { font-size: var(--t-sm); line-height: var(--t-sm-lh); color: var(--c-muted); }

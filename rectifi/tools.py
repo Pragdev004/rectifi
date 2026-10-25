@@ -1,0 +1,1100 @@
+"""The deterministic core. Every number Rectifi shows you is computed here, in SQL or Decimal.
+
+The LLM agent, the Streamlit UI and the MCP server all call these same functions.
+Nothing in this file talks to an LLM.
+"""
+
+from __future__ import annotations
+
+import calendar
+import hashlib
+import hmac
+import re
+import secrets
+from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+
+from .db import connect
+from .money import D0, PAISE, fmt_inr, parse_amount
+from .parsing import best_effort_sms, classify_sms, parse_sms
+
+
+class RectifiError(ValueError):
+    """A user-facing error: the message is safe to show in the UI or return to the agent."""
+
+
+TXN_SELECT = """
+SELECT t.id, t.txn_date, t.amount, t.direction, t.payee, t.description, t.note, t.source,
+       t.upi_ref, t.account_id, a.name AS account, t.category_id, c.name AS category, c.kind AS category_kind
+FROM transactions t
+LEFT JOIN categories c ON c.id = t.category_id
+LEFT JOIN accounts   a ON a.id = t.account_id
+"""
+
+DIRECTIONS = {"debit", "credit"}
+
+
+# ─────────────────────────── dates ───────────────────────────
+
+def today() -> date:
+    return date.today()
+
+
+def resolve_date(value: str | date | None) -> date:
+    """'today', 'yesterday', '2026-10-21', '21-10-2026', '21/10/26' or a date -> date. Rejects the future."""
+    if value is None or (isinstance(value, str) and value.strip().lower() in ("", "today", "now")):
+        return today()
+    if isinstance(value, datetime):
+        resolved = value.date()
+    elif isinstance(value, date):
+        resolved = value
+    else:
+        text = value.strip().lower()
+        if text == "yesterday":
+            return today() - timedelta(days=1)
+        resolved = None
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d-%m-%y", "%d/%m/%y", "%d %b %Y", "%d-%b-%Y", "%d-%b-%y", "%d %B %Y"):
+            try:
+                resolved = datetime.strptime(value.strip(), fmt).date()
+                break
+            except ValueError:
+                continue
+        if resolved is None:
+            raise RectifiError(f"I couldn't read the date {value!r}. Use YYYY-MM-DD, 'today' or 'yesterday'.")
+    if resolved > today():
+        raise RectifiError(f"{resolved.isoformat()} is in the future — Rectifi only records money that already moved.")
+    return resolved
+
+
+def parse_month(value: str | date | None) -> date:
+    """'2026-10', 'this_month', 'last_month', a date, or None -> first day of that month."""
+    if value is None:
+        d = today()
+    elif isinstance(value, date):
+        d = value
+    else:
+        text = value.strip().lower().replace(" ", "_")
+        if text in ("", "this_month", "current", "now"):
+            d = today()
+        elif text in ("last_month", "previous_month"):
+            d = today().replace(day=1) - timedelta(days=1)
+        else:
+            match = re.fullmatch(r"(\d{4})-(\d{1,2})", text)
+            if not match:
+                raise RectifiError(f"I couldn't read the month {value!r}. Use YYYY-MM, 'this_month' or 'last_month'.")
+            year, month = int(match.group(1)), int(match.group(2))
+            if not 1 <= month <= 12:
+                raise RectifiError(f"{value!r} isn't a real month.")
+            d = date(year, month, 1)
+    return d.replace(day=1)
+
+
+def month_bounds(month: str | date | None) -> tuple[date, date]:
+    first = parse_month(month)
+    last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
+    return first, last
+
+
+# ─────────────────────────── lookups ───────────────────────────
+
+def list_categories(kind: str | None = None) -> list[dict]:
+    with connect() as conn:
+        if kind:
+            return conn.execute("SELECT id, name, kind FROM categories WHERE kind = %s ORDER BY name", (kind,)).fetchall()
+        return conn.execute("SELECT id, name, kind FROM categories ORDER BY kind, name").fetchall()
+
+
+def _category_id(conn, name: str) -> int:
+    row = conn.execute("SELECT id FROM categories WHERE lower(name) = lower(%s)", (name.strip(),)).fetchone()
+    if row:
+        return row["id"]
+    # forgiving prefix match: "food" -> "Food & Dining"
+    rows = conn.execute("SELECT id, name FROM categories WHERE name ILIKE %s", (name.strip() + "%",)).fetchall()
+    if len(rows) == 1:
+        return rows[0]["id"]
+    names = [r["name"] for r in conn.execute("SELECT name FROM categories ORDER BY name").fetchall()]
+    raise RectifiError(f"Unknown category {name!r}. Pick one of: {', '.join(names)}.")
+
+
+def _check_kind(conn, category_id: int, direction: str) -> None:
+    """Money out needs an expense (or transfer) category; money in needs an income (or transfer) one.
+    Otherwise the row would silently vanish from every summary."""
+    row = conn.execute("SELECT name, kind FROM categories WHERE id = %s", (category_id,)).fetchone()
+    allowed = {"debit": ("expense", "transfer"), "credit": ("income", "transfer")}[direction]
+    if row["kind"] not in allowed:
+        way = "going out" if direction == "debit" else "coming in"
+        wanted = "an expense" if direction == "debit" else "an income"
+        raise RectifiError(
+            f"{row['name']!r} is {'a' if row['kind'] == 'transfer' else 'an'} {row['kind']} category, "
+            f"but this money is {way}. Pick {wanted} category (or Transfers)."
+        )
+
+
+def _categorize(conn, payee: str | None, description: str | None, direction: str) -> int:
+    """Rule-based: the first merchant pattern found in the payee/description wins (longest pattern first)."""
+    haystack = f"{payee or ''} {description or ''}".lower()
+    if haystack.strip():
+        row = conn.execute(
+            """SELECT r.category_id FROM merchant_rules r JOIN categories c ON c.id = r.category_id
+               WHERE strpos(%s, r.pattern) > 0
+                 AND (c.kind = %s OR c.kind = 'transfer')
+               ORDER BY length(r.pattern) DESC LIMIT 1""",
+            (haystack, "expense" if direction == "debit" else "income"),
+        ).fetchone()
+        if row:
+            return row["category_id"]
+    fallback = "Other" if direction == "debit" else "Other income"
+    return conn.execute("SELECT id FROM categories WHERE name = %s", (fallback,)).fetchone()["id"]
+
+
+def _account_id(conn, account: str | int | None) -> int | None:
+    if account in (None, ""):
+        return None
+    if isinstance(account, int):
+        return account
+    text = str(account).strip()
+    row = conn.execute(
+        "SELECT id FROM accounts WHERE lower(name) = lower(%s) OR last4 = %s OR right(last4, 4) = right(%s, 4)",
+        (text, text, text),
+    ).fetchone()
+    if row:
+        return row["id"]
+    raise RectifiError(f"Unknown account {account!r}. Add it on the Accounts page first.")
+
+
+def only_account_id() -> int | None:
+    """The id of the one account, if exactly one exists. Otherwise None. Used to attach agent entries by default."""
+    accounts = list_accounts()
+    return accounts[0]["id"] if len(accounts) == 1 else None
+
+
+def default_account() -> dict | None:
+    """The account a manual form should preselect: the only one, else the one used most recently, else the first.
+
+    Returns None only when there are no accounts at all.
+    """
+    accounts = list_accounts()
+    if not accounts:
+        return None
+    if len(accounts) == 1:
+        return accounts[0]
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT account_id FROM transactions WHERE account_id IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+    if row:
+        for a in accounts:
+            if a["id"] == row["account_id"]:
+                return a
+    return accounts[0]
+
+
+def account_for_statement(last4: str | None) -> dict:
+    """Which account should a statement go into? Returns {'account': row or None, 'by_digits': bool, 'reason': str or None}.
+
+    - the statement's letterhead gave account digits and an account has them  -> that account (by_digits True)
+    - digits given, nobody has them, but the only account has no digits saved -> that account (nothing contradicts it)
+    - digits given and they match no account -> no account, with a reason: importing one bank's rows into another
+      bank's account would make the balance check lie, so the person must choose
+    - no digits in the statement -> default_account() (the only one, else the most recently used)
+    """
+    accounts = list_accounts()
+    if not accounts:
+        return {"account": None, "by_digits": False, "reason": "There is no account yet. Add one on the Accounts page first."}
+    if last4:
+        for a in accounts:
+            if a["last4"] and a["last4"][-4:] == last4:
+                return {"account": a, "by_digits": True, "reason": None}
+        if len(accounts) == 1 and not accounts[0]["last4"]:
+            return {"account": accounts[0], "by_digits": False, "reason": None}
+        return {"account": None, "by_digits": False,
+                "reason": f"This statement is for an account ending {last4}, but none of your accounts has those last 4 digits. "
+                          "Pick the account yourself, or add it (with its last 4 digits) on the Accounts page."}
+    return {"account": default_account(), "by_digits": False, "reason": None}
+
+
+def get_transaction(txn_id: int, conn=None) -> dict | None:
+    if conn is None:
+        with connect() as c:
+            return get_transaction(txn_id, c)
+    return conn.execute(TXN_SELECT + " WHERE t.id = %s", (txn_id,)).fetchone()
+
+
+# ─────────────────────────── writes ───────────────────────────
+
+def add_transaction(
+    amount,
+    direction: str = "debit",
+    txn_date: str | date | None = None,
+    payee: str | None = None,
+    category: str | None = None,
+    account: str | int | None = None,
+    note: str | None = None,
+    source: str = "manual",
+    upi_ref: str | None = None,
+    raw_text: str | None = None,
+    description: str | None = None,
+    fingerprint: str | None = None,
+    _conn=None,
+) -> dict:
+    """Insert one transaction. Returns {'status': 'added'|'duplicate', 'transaction': {...}}.
+
+    `_conn` lets a caller (ingest_sms) do this insert in its own database transaction."""
+    try:
+        value = parse_amount(amount)
+    except ValueError as exc:
+        raise RectifiError(str(exc)) from exc
+    if value <= 0:
+        raise RectifiError("Amount must be more than ₹0.")
+    direction = (direction or "").strip().lower()
+    if direction not in DIRECTIONS:
+        raise RectifiError("Direction must be 'debit' (money out) or 'credit' (money in).")
+    when = resolve_date(txn_date)
+    payee = payee.strip() if payee else None
+    upi_ref = upi_ref.strip() if upi_ref else None
+
+    def insert(conn) -> dict:
+        if category:
+            category_id = _category_id(conn, category)
+            _check_kind(conn, category_id, direction)
+        else:
+            category_id = _categorize(conn, payee, description, direction)
+        account_id = _account_id(conn, account)
+        row = conn.execute(
+            """INSERT INTO transactions
+                 (account_id, amount, direction, txn_date, payee, description, upi_ref, fingerprint,
+                  category_id, source, raw_text, note)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT DO NOTHING
+               RETURNING id""",
+            (account_id, value, direction, when, payee, description, upi_ref, fingerprint,
+             category_id, source, raw_text, note),
+        ).fetchone()
+        if row is None:
+            existing = conn.execute(
+                TXN_SELECT + " WHERE (t.upi_ref = %s AND t.direction = %s) OR t.fingerprint = %s LIMIT 1",
+                (upi_ref, direction, fingerprint),
+            ).fetchone()
+            return {"status": "duplicate", "transaction": existing}
+        return {"status": "added", "transaction": get_transaction(row["id"], conn)}
+
+    if _conn is not None:
+        return insert(_conn)
+    with connect() as conn:
+        return insert(conn)
+
+
+def set_category(txn_id: int, category: str, remember: bool = False) -> dict:
+    """Recategorise a transaction. remember=True teaches Rectifi: future payments to this payee get the same category."""
+    with connect() as conn:
+        category_id = _category_id(conn, category)
+        current = conn.execute("SELECT direction FROM transactions WHERE id = %s", (txn_id,)).fetchone()
+        if current is None:
+            raise RectifiError(f"No transaction #{txn_id}.")
+        _check_kind(conn, category_id, current["direction"])
+        row = conn.execute(
+            "UPDATE transactions SET category_id = %s WHERE id = %s RETURNING payee", (category_id, txn_id)
+        ).fetchone()
+        learned = None
+        if remember and row["payee"]:
+            pattern = row["payee"].strip().lower()
+            conn.execute(
+                """INSERT INTO merchant_rules (pattern, category_id) VALUES (%s, %s)
+                   ON CONFLICT (pattern) DO UPDATE SET category_id = EXCLUDED.category_id""",
+                (pattern, category_id),
+            )
+            learned = pattern
+        return {"transaction": get_transaction(txn_id, conn), "learned_rule": learned}
+
+
+def update_note(txn_id: int, note: str | None) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE transactions SET note = %s WHERE id = %s", (note or None, txn_id))
+
+
+def set_account(txn_id: int, account_id: int | None) -> dict:
+    """Link a transaction to an account, or unlink it (account_id None). Returns the updated transaction.
+
+    A row that came from a bank statement already belongs to that statement's account, so it can't be moved:
+    undo the import instead. Everything else (manual, chat, sms) can be linked after the fact, which is how an
+    entry made without an account gets covered by the balance check."""
+    with connect() as conn:
+        row = conn.execute("SELECT source FROM transactions WHERE id = %s", (txn_id,)).fetchone()
+        if row is None:
+            raise RectifiError(f"No transaction #{txn_id}.")
+        if account_id is not None and conn.execute("SELECT 1 FROM accounts WHERE id = %s", (account_id,)).fetchone() is None:
+            raise RectifiError(f"No account #{account_id}.")
+        if row["source"] == "statement":
+            raise RectifiError("This entry came from a bank statement, so it belongs to that statement's account. "
+                               "Undo the import to move it.")
+        conn.execute("UPDATE transactions SET account_id = %s WHERE id = %s", (account_id, txn_id))
+        return get_transaction(txn_id, conn)
+
+
+def delete_transaction(txn_id: int) -> bool:
+    with connect() as conn:
+        return conn.execute("DELETE FROM transactions WHERE id = %s RETURNING id", (txn_id,)).fetchone() is not None
+
+
+# ─────────────────────────── reads ───────────────────────────
+
+def list_transactions(
+    start: date | str | None = None,
+    end: date | str | None = None,
+    category: str | None = None,
+    search: str | None = None,
+    direction: str | None = None,
+    account: str | int | None = None,
+    limit: int = 200,
+    unlinked: bool = False,
+) -> list[dict]:
+    clauses, params = [], []
+    if unlinked:
+        clauses.append("t.account_id IS NULL")
+    if start:
+        clauses.append("t.txn_date >= %s")
+        params.append(resolve_date(start) if isinstance(start, str) else start)
+    if end:
+        clauses.append("t.txn_date <= %s")
+        params.append(resolve_date(end) if isinstance(end, str) else end)
+    if direction:
+        clauses.append("t.direction = %s")
+        params.append(direction)
+    with connect() as conn:
+        if category:
+            clauses.append("t.category_id = %s")
+            params.append(_category_id(conn, category))
+        if account not in (None, ""):
+            clauses.append("t.account_id = %s")
+            params.append(_account_id(conn, account))
+        if search:
+            clauses.append("(t.payee ILIKE %s OR t.description ILIKE %s OR t.note ILIKE %s)")
+            params += [f"%{search}%"] * 3
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(max(1, min(int(limit), 5000)))
+        return conn.execute(TXN_SELECT + where + " ORDER BY t.txn_date DESC, t.id DESC LIMIT %s", params).fetchall()
+
+
+def spending_summary(start: date | None = None, end: date | None = None) -> dict:
+    """Income, spending, savings and the category breakdown for a date range (default: this month).
+
+    Transfers (moving money between your own accounts) count as neither income nor spending.
+    """
+    if start is None or end is None:
+        start, end = month_bounds(None)
+    with connect() as conn:
+        totals = conn.execute(
+            """SELECT
+                 COALESCE(SUM(t.amount) FILTER (WHERE t.direction = 'credit' AND c.kind = 'income'), 0)  AS income,
+                 COALESCE(SUM(t.amount) FILTER (WHERE t.direction = 'debit'  AND c.kind = 'expense'), 0) AS spending,
+                 COUNT(*) AS count
+               FROM transactions t JOIN categories c ON c.id = t.category_id
+               WHERE t.txn_date BETWEEN %s AND %s""",
+            (start, end),
+        ).fetchone()
+        by_category = conn.execute(
+            """SELECT c.name AS category, SUM(t.amount) AS amount, COUNT(*) AS count
+               FROM transactions t JOIN categories c ON c.id = t.category_id
+               WHERE t.txn_date BETWEEN %s AND %s AND t.direction = 'debit' AND c.kind = 'expense'
+               GROUP BY c.name ORDER BY SUM(t.amount) DESC""",
+            (start, end),
+        ).fetchall()
+    income, spending = Decimal(totals["income"]), Decimal(totals["spending"])
+    saved = income - spending
+    savings_rate = (saved / income * 100).quantize(Decimal("0.1")) if income > 0 else None
+    for row in by_category:
+        row["share"] = (row["amount"] / spending * 100).quantize(Decimal("0.1")) if spending > 0 else D0
+    return {
+        "start": start,
+        "end": end,
+        "income": income,
+        "spending": spending,
+        "saved": saved,
+        "savings_rate": savings_rate,
+        "count": totals["count"],
+        "by_category": by_category,
+    }
+
+
+def daily_spending(start: date, end: date) -> list[dict]:
+    """One row per day in the range (zero-filled) with that day's spending and the running total."""
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT d::date AS day,
+                      COALESCE(SUM(t.amount) FILTER (WHERE t.direction = 'debit' AND c.kind = 'expense'), 0) AS spent
+               FROM generate_series(%s::date, %s::date, interval '1 day') d
+               LEFT JOIN transactions t ON t.txn_date = d::date
+               LEFT JOIN categories c ON c.id = t.category_id
+               GROUP BY d ORDER BY d""",
+            (start, end),
+        ).fetchall()
+    running = D0
+    for row in rows:
+        running += row["spent"]
+        row["cumulative"] = running
+    return rows
+
+
+def spending_pace(month: str | date | None = None) -> dict:
+    """Cumulative spending against an even pace through the month's total budget, one row per day so far.
+
+    pace on day n = total budget x n / days in the month, rounded to paise. `through` is the last day that has
+    happened (today, or the month's last day for a past month); `days` is empty for a month that hasn't started.
+    This is the Overview chart's data, worked out in Decimal here so no screen does its own sums.
+    """
+    first, last = month_bounds(month)
+    total_limit = budget_status(first)["total_limit"]
+    through = min(last, today())
+    days = []
+    if through >= first:
+        for row in daily_spending(first, through):
+            index = (row["day"] - first).days + 1
+            pace = (total_limit * index / last.day).quantize(PAISE, rounding=ROUND_HALF_UP)
+            days.append({"day": row["day"], "spent": row["spent"], "cumulative": row["cumulative"], "pace": pace})
+    return {"month": first, "through": through, "total_limit": total_limit, "days": days}
+
+
+# ─────────────────────────── budgets ───────────────────────────
+
+def set_budget(category: str, limit, month: str | date | None = None) -> dict:
+    try:
+        value = parse_amount(limit)
+    except ValueError as exc:
+        raise RectifiError(str(exc)) from exc
+    if value <= 0:
+        raise RectifiError("A budget must be more than ₹0.")
+    first = parse_month(month)
+    with connect() as conn:
+        category_id = _category_id(conn, category)
+        kind = conn.execute("SELECT kind FROM categories WHERE id = %s", (category_id,)).fetchone()["kind"]
+        if kind != "expense":
+            raise RectifiError("Budgets are for spending categories only.")
+        conn.execute(
+            """INSERT INTO budgets (category_id, month, limit_amount) VALUES (%s, %s, %s)
+               ON CONFLICT (category_id, month) DO UPDATE SET limit_amount = EXCLUDED.limit_amount""",
+            (category_id, first, value),
+        )
+    return {"category": category, "month": first, "limit": value}
+
+
+def delete_budget(category: str, month: str | date | None = None) -> None:
+    first = parse_month(month)
+    with connect() as conn:
+        conn.execute("DELETE FROM budgets WHERE category_id = %s AND month = %s", (_category_id(conn, category), first))
+
+
+def copy_budgets(from_month: str | date, to_month: str | date) -> int:
+    """Carry last month's budgets forward without overwriting ones already set."""
+    with connect() as conn:
+        result = conn.execute(
+            """INSERT INTO budgets (category_id, month, limit_amount)
+               SELECT category_id, %s, limit_amount FROM budgets WHERE month = %s
+               ON CONFLICT DO NOTHING""",
+            (parse_month(to_month), parse_month(from_month)),
+        )
+        return result.rowcount
+
+
+NEAR_LIMIT = Decimal("80")
+
+
+def budget_status(month: str | date | None = None) -> dict:
+    """Per-category: limit, spent, remaining, percent used and a state of ok / near / over.
+
+    'pace' is how far through the month we are, so 60% spent on day 10 of 30 reads as ahead of pace.
+    """
+    first, last = month_bounds(month)
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT c.name AS category, b.limit_amount AS limit,
+                      COALESCE(SUM(t.amount) FILTER (WHERE t.direction = 'debit'), 0) AS spent
+               FROM budgets b
+               JOIN categories c ON c.id = b.category_id
+               LEFT JOIN transactions t ON t.category_id = b.category_id AND t.txn_date BETWEEN %s AND %s
+               WHERE b.month = %s
+               GROUP BY c.name, b.limit_amount
+               ORDER BY c.name""",
+            (first, last, first),
+        ).fetchall()
+    now = today()
+    if now < first:
+        pace = D0
+    elif now > last:
+        pace = Decimal(100)
+    else:
+        pace = (Decimal(now.day) / Decimal(last.day) * 100).quantize(Decimal("0.1"))
+    total_limit = total_spent = D0
+    for row in rows:
+        row["remaining"] = row["limit"] - row["spent"]
+        row["percent"] = (row["spent"] / row["limit"] * 100).quantize(Decimal("0.1"))
+        row["state"] = "over" if row["spent"] > row["limit"] else ("near" if row["percent"] >= NEAR_LIMIT else "ok")
+        total_limit += row["limit"]
+        total_spent += row["spent"]
+    return {
+        "month": first,
+        "pace": pace,
+        "categories": rows,
+        "total_limit": total_limit,
+        "total_spent": total_spent,
+    }
+
+
+# ─────────────────────────── accounts & reconciliation ───────────────────────────
+
+def add_account(name: str, last4: str | None = None) -> dict:
+    name = (name or "").strip()
+    if not name:
+        raise RectifiError("Give the account a name, like 'SBI Savings'.")
+    last4 = re.sub(r"\D", "", last4 or "")[-4:] or None
+    with connect() as conn:
+        row = conn.execute(
+            """INSERT INTO accounts (name, last4) VALUES (%s, %s)
+               ON CONFLICT (name) DO UPDATE SET last4 = COALESCE(EXCLUDED.last4, accounts.last4)
+               RETURNING id, name, last4""",
+            (name, last4),
+        ).fetchone()
+    return row
+
+
+def list_accounts() -> list[dict]:
+    with connect() as conn:
+        return conn.execute(
+            """SELECT a.id, a.name, a.last4,
+                      (SELECT COUNT(*) FROM transactions t WHERE t.account_id = a.id) AS transactions,
+                      (SELECT max(as_of) FROM balance_snapshots s WHERE s.account_id = a.id) AS last_snapshot
+               FROM accounts a ORDER BY a.name"""
+        ).fetchall()
+
+
+def record_balance(account: str | int, as_of: str | date, balance, source: str = "manual") -> dict:
+    try:
+        value = parse_amount(balance) if not (isinstance(balance, str) and balance.strip().startswith("-")) else -parse_amount(balance.strip()[1:])
+    except ValueError as exc:
+        raise RectifiError(str(exc)) from exc
+    when = resolve_date(as_of)
+    with connect() as conn:
+        account_id = _account_id(conn, account)
+        if account_id is None:
+            raise RectifiError("Pick an account.")
+        conn.execute(
+            """INSERT INTO balance_snapshots (account_id, as_of, balance, source) VALUES (%s, %s, %s, %s)
+               ON CONFLICT (account_id, as_of) DO UPDATE SET balance = EXCLUDED.balance, source = EXCLUDED.source""",
+            (account_id, when, value, source),
+        )
+    return {"account_id": account_id, "as_of": when, "balance": value}
+
+
+def list_snapshots(account: str | int) -> list[dict]:
+    with connect() as conn:
+        account_id = _account_id(conn, account)
+        return conn.execute(
+            "SELECT as_of, balance, source FROM balance_snapshots WHERE account_id = %s ORDER BY as_of", (account_id,)
+        ).fetchall()
+
+
+def reconcile(account: str | int, from_date: date | None = None, to_date: date | None = None) -> dict:
+    """Prove completeness with arithmetic.
+
+        opening balance + credits − debits (that Rectifi knows about) = expected closing
+        expected closing vs the bank's real closing  →  gap
+
+    A gap of ₹0 means nothing is missing. A non-zero gap means some transaction slipped through.
+    """
+    with connect() as conn:
+        account_id = _account_id(conn, account)
+        if account_id is None:
+            raise RectifiError("Pick an account to reconcile.")
+        opening_sql = "SELECT as_of, balance FROM balance_snapshots WHERE account_id = %s"
+        if from_date:
+            opening = conn.execute(opening_sql + " AND as_of <= %s ORDER BY as_of DESC LIMIT 1", (account_id, from_date)).fetchone()
+        else:
+            opening = conn.execute(opening_sql + " ORDER BY as_of ASC LIMIT 1", (account_id,)).fetchone()
+        if to_date:
+            closing = conn.execute(opening_sql + " AND as_of <= %s ORDER BY as_of DESC LIMIT 1", (account_id, to_date)).fetchone()
+        else:
+            closing = conn.execute(opening_sql + " ORDER BY as_of DESC LIMIT 1", (account_id,)).fetchone()
+        if opening is None or closing is None or opening["as_of"] >= closing["as_of"]:
+            raise RectifiError(
+                "Reconciliation needs two balances from the bank on different dates — "
+                "import a statement with a balance column, or record an opening and closing balance."
+            )
+        movement = conn.execute(
+            """SELECT COALESCE(SUM(amount) FILTER (WHERE direction = 'credit'), 0) AS credits,
+                      COALESCE(SUM(amount) FILTER (WHERE direction = 'debit'), 0)  AS debits,
+                      COUNT(*) AS count
+               FROM transactions WHERE account_id = %s AND txn_date > %s AND txn_date <= %s""",
+            (account_id, opening["as_of"], closing["as_of"]),
+        ).fetchone()
+    expected = opening["balance"] + movement["credits"] - movement["debits"]
+    gap = closing["balance"] - expected
+    if gap == 0:
+        explanation = "Every rupee is accounted for."
+    elif gap > 0:
+        explanation = "The bank shows more money than Rectifi expects: a credit is missing, or a debit was recorded twice."
+    else:
+        explanation = "The bank shows less money than Rectifi expects: a debit is missing, or a credit was recorded twice."
+    return {
+        "account_id": account_id,
+        "opening_date": opening["as_of"],
+        "opening": opening["balance"],
+        "credits": movement["credits"],
+        "debits": movement["debits"],
+        "count": movement["count"],
+        "expected_closing": expected,
+        "closing_date": closing["as_of"],
+        "closing": closing["balance"],
+        "gap": gap,
+        "balanced": gap == 0,
+        "explanation": explanation,
+    }
+
+
+# ─────────────────────────── statement imports: history and undo ───────────────────────────
+
+def get_import_batch(batch_id: int) -> dict | None:
+    """One import: filename, counts, whether it was undone, and how many of its rows still exist."""
+    with connect() as conn:
+        return conn.execute(
+            """SELECT b.id, b.account_id, a.name AS account, b.filename, b.created_at, b.added, b.merged, b.duplicates,
+                      b.needs_review, b.undone_at,
+                      (SELECT COUNT(*) FROM transactions t WHERE t.import_batch_id = b.id) AS rows_left
+               FROM import_batches b LEFT JOIN accounts a ON a.id = b.account_id WHERE b.id = %s""",
+            (batch_id,),
+        ).fetchone()
+
+
+def undo_import(batch_id: int) -> dict:
+    """Remove exactly the transactions this import ADDED. Returns {'removed', 'snapshots_restored', 'already_undone'}.
+
+    - Rows the import only merged into (your own entries) or found already recorded are not tagged with this batch,
+      so they stay as they are.
+    - The balance snapshots this import wrote are put back: deleted if the import created them, restored to the old
+      value if it replaced one. A snapshot that changed afterwards (you typed a newer balance, or a later import
+      replaced it) is left alone.
+    - Safe to call twice: the second call does nothing.
+    """
+    with connect() as conn:
+        batch = conn.execute("SELECT * FROM import_batches WHERE id = %s FOR UPDATE", (batch_id,)).fetchone()
+        if batch is None:
+            raise RectifiError(f"No import #{batch_id}.")
+        if batch["undone_at"] is not None:
+            return {"removed": 0, "snapshots_restored": 0, "already_undone": True}
+        removed = conn.execute("DELETE FROM transactions WHERE import_batch_id = %s", (batch_id,)).rowcount
+        restored = 0
+        if batch["account_id"] is not None:
+            for change in batch["snapshot_changes"] or []:
+                current = conn.execute(
+                    "SELECT balance, source FROM balance_snapshots WHERE account_id = %s AND as_of = %s",
+                    (batch["account_id"], change["as_of"]),
+                ).fetchone()
+                if current is None or current["source"] != "statement" or current["balance"] != Decimal(change["new_balance"]):
+                    continue
+                if change["prev_balance"] is None:
+                    conn.execute("DELETE FROM balance_snapshots WHERE account_id = %s AND as_of = %s",
+                                 (batch["account_id"], change["as_of"]))
+                else:
+                    conn.execute("UPDATE balance_snapshots SET balance = %s, source = %s WHERE account_id = %s AND as_of = %s",
+                                 (Decimal(change["prev_balance"]), change["prev_source"], batch["account_id"], change["as_of"]))
+                restored += 1
+        conn.execute("UPDATE import_batches SET undone_at = now() WHERE id = %s", (batch_id,))
+    return {"removed": removed, "snapshots_restored": restored, "already_undone": False}
+
+
+# ─────────────────────────── weekly review ───────────────────────────
+
+COMMITMENT_MAX = 280
+STALE_BALANCE_DAYS = 14
+NO_ACCOUNT_REASON = (
+    "No bank account added yet — Rectifi can't prove nothing is missing until you add one and record its balance."
+)
+
+
+def week_bounds(day: str | date | None = None) -> tuple[date, date]:
+    """Monday and Sunday of the week that contains `day` (default: today)."""
+    d = resolve_date(day)
+    monday = d - timedelta(days=d.weekday())
+    return monday, monday + timedelta(days=6)
+
+
+def _account_reasons(account: dict, as_of: date) -> list[str]:
+    """Why an account needs a look this week. An empty list means it is fine."""
+    reasons = []
+    if account.get("last_snapshot") is None:
+        reasons.append("No bank balance recorded yet, so Rectifi can't prove nothing is missing. Record the balance from your bank.")
+        return reasons
+    try:
+        r = reconcile(account["id"])
+    except RectifiError:
+        reasons.append("No two bank balances yet, so Rectifi can't prove nothing is missing.")
+    else:
+        if not r["balanced"]:
+            word = "more" if r["gap"] > 0 else "less"
+            reasons.append(f"Gap of {fmt_inr(abs(r['gap']))}: the bank shows {word} money than Rectifi expects.")
+    last = account.get("last_snapshot")
+    if last is not None and (as_of - last).days > STALE_BALANCE_DAYS:
+        reasons.append(f"The latest bank balance is from {last.isoformat()}, {(as_of - last).days} days ago. Record a newer one.")
+    return reasons
+
+
+def weekly_review(day: str | date | None = None) -> dict:
+    """Everything the Monday-to-Sunday review page shows, computed here so no screen does its own sums.
+
+    The current week isn't over, so spending is compared with the SAME number of days last week
+    (Monday to today vs last Monday to last same weekday). A finished week is compared with the whole week before.
+    """
+    start, end = week_bounds(day)
+    now = today()
+    through = min(end, now)                       # last day that has really happened
+    days_elapsed = (through - start).days + 1
+    prev_start = start - timedelta(days=7)
+    prev_end = prev_start + timedelta(days=days_elapsed - 1)
+
+    summary = spending_summary(start, end)
+    prev_spending = spending_summary(prev_start, prev_end)["spending"]
+    change = summary["spending"] - prev_spending
+    if prev_spending > 0:
+        change_pct = (change / prev_spending * 100).quantize(Decimal("0.1"))
+        trend = "up" if change > 0 else "down" if change < 0 else "flat"
+    else:
+        change_pct = None
+        trend = "no_prior" if summary["spending"] > 0 else "flat"
+
+    with connect() as conn:
+        biggest = conn.execute(
+            TXN_SELECT + """ WHERE t.txn_date BETWEEN %s AND %s AND t.direction = 'debit' AND c.kind = 'expense'
+                             ORDER BY t.amount DESC, t.id LIMIT 3""",
+            (start, end),
+        ).fetchall()
+        uncategorised = conn.execute(
+            """SELECT COUNT(*) AS n FROM transactions t JOIN categories c ON c.id = t.category_id
+               WHERE t.txn_date BETWEEN %s AND %s AND c.name IN ('Other', 'Other income')""",
+            (start, end),
+        ).fetchone()["n"]
+        unlinked = conn.execute(
+            "SELECT COUNT(*) AS n FROM transactions WHERE txn_date BETWEEN %s AND %s AND account_id IS NULL",
+            (start, end),
+        ).fetchone()["n"]
+        commitments = {
+            row["week_start"]: row["commitment"]
+            for row in conn.execute(
+                "SELECT week_start, commitment FROM weekly_reviews WHERE week_start IN (%s, %s)", (start, start - timedelta(days=7))
+            ).fetchall()
+        }
+
+    budgets = budget_status(through)
+    needing = [
+        {"category": b["category"], "limit": b["limit"], "spent": b["spent"], "percent": b["percent"], "state": b["state"]}
+        for b in budgets["categories"] if b["state"] in ("near", "over")
+    ]
+    accounts = []
+    all_accounts = list_accounts()
+    if not all_accounts:
+        # No account means no balance to check against. "Nothing is missing" can't be proven, so don't say it.
+        accounts.append({"id": None, "name": "No bank account", "reasons": [NO_ACCOUNT_REASON]})
+    for account in all_accounts:
+        reasons = _account_reasons(account, through)
+        if reasons:
+            accounts.append({"id": account["id"], "name": account["name"], "reasons": reasons})
+    all_clear = bool(all_accounts) and not accounts and not needing and not uncategorised and not unlinked
+
+    return {
+        "week_start": start,
+        "week_end": end,
+        "through": through,
+        "days_elapsed": days_elapsed,
+        "is_current": end >= now,
+        "count": summary["count"],
+        "income": summary["income"],
+        "spending": summary["spending"],
+        "saved": summary["saved"],
+        "savings_rate": summary["savings_rate"],
+        "prev_start": prev_start,
+        "prev_end": prev_end,
+        "prev_spending": prev_spending,
+        "spending_change": change,
+        "spending_change_pct": change_pct,
+        "trend": trend,
+        "top_categories": summary["by_category"][:3],
+        "biggest_debits": biggest,
+        "uncategorised_count": uncategorised,
+        "unlinked_count": unlinked,
+        "account_count": len(all_accounts),
+        "all_clear": all_clear,
+        "budget_month": budgets["month"],
+        "budgets_needing_attention": needing,
+        "accounts_needing_attention": accounts,
+        "last_commitment": commitments.get(start - timedelta(days=7)),
+        "commitment": commitments.get(start),
+    }
+
+
+def save_commitment(text: str, day: str | date | None = None) -> dict:
+    """Save (or replace) this week's one-line promise. Returns {'week_start', 'commitment'}."""
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if not text:
+        raise RectifiError("Write one short sentence for your commitment.")
+    if len(text) > COMMITMENT_MAX:
+        raise RectifiError(f"Keep it to {COMMITMENT_MAX} characters or fewer, one promise is easier to keep.")
+    start, _ = week_bounds(day)
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO weekly_reviews (week_start, commitment) VALUES (%s, %s)
+               ON CONFLICT (week_start) DO UPDATE SET commitment = EXCLUDED.commitment""",
+            (start, text),
+        )
+    return {"week_start": start, "commitment": text}
+
+
+def week_anchor(value: str | date | None) -> date:
+    """'this_week' (or empty), 'last_week', or any date inside the week you want -> a date in that week."""
+    if value is None or (isinstance(value, str) and value.strip().lower().replace(" ", "_") in ("", "this_week", "current", "now")):
+        return today()
+    if isinstance(value, str) and value.strip().lower().replace(" ", "_") in ("last_week", "previous_week"):
+        return today() - timedelta(days=7)
+    return resolve_date(value)
+
+
+def weekly_review_text(review: dict) -> dict:
+    """The weekly review as plain strings (rupees as '₹1,234.00', percentages as '12.5%').
+
+    The agent and the MCP server both send this to a model, so every number is already formatted here
+    and the model only has to copy it.
+    """
+    savings_rate = review["savings_rate"]
+    return {
+        "week": f"{review['week_start']} to {review['week_end']}",
+        "counted_through": str(review["through"]),
+        "week_is_finished": not review["is_current"],
+        "transactions": review["count"],
+        "income": fmt_inr(review["income"]),
+        "spending": fmt_inr(review["spending"]),
+        "saved": fmt_inr(review["saved"]),
+        "savings_rate": f"{savings_rate}%" if savings_rate is not None else "no income recorded",
+        "compared_with": f"{review['prev_start']} to {review['prev_end']}",
+        "previous_spending": fmt_inr(review["prev_spending"]),
+        "spending_change": (fmt_inr(review["spending_change"], sign=True) if review["prev_spending"] > 0
+                            else "nothing to compare, no spending in the comparison period"),
+        "spending_change_percent": f"{review['spending_change_pct']}%" if review["spending_change_pct"] is not None else "no spending in the comparison period",
+        "trend": review["trend"],
+        "top_categories": [
+            {"category": c["category"], "spent": fmt_inr(c["amount"]), "share": f"{c['share']}%"} for c in review["top_categories"]
+        ],
+        "biggest_debits": [
+            f"#{t['id']} {t['txn_date']} {fmt_inr(t['amount'])} {t['payee'] or t['description'] or '—'} [{t['category']}]"
+            for t in review["biggest_debits"]
+        ],
+        "uncategorised_transactions": review["uncategorised_count"],
+        "entries_not_linked_to_an_account": review["unlinked_count"],
+        "all_clear": review["all_clear"],
+        "budget_month": review["budget_month"].strftime("%Y-%m"),
+        "budgets_needing_attention": [
+            {"category": b["category"], "limit": fmt_inr(b["limit"]), "spent": fmt_inr(b["spent"]),
+             "used": f"{b['percent']}%", "state": b["state"]}
+            for b in review["budgets_needing_attention"]
+        ],
+        "accounts_needing_attention": [{"account": a["name"], "reasons": a["reasons"]} for a in review["accounts_needing_attention"]],
+        "last_weeks_commitment": review["last_commitment"],
+        "this_weeks_commitment": review["commitment"],
+    }
+
+
+# ─────────────────────────── phone SMS capture ───────────────────────────
+# A phone forwards bank SMS to the laptop (rectifi/sms_gateway.py). Everything below is fixed rules and SQL:
+# no model reads an SMS. A device proves itself with a token; only the token's SHA-256 hash is stored.
+
+TOKEN_PREFIX = "rf_"
+DEVICE_NAME_MAX = 60
+SMS_TEXT_MAX = 4000
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_device(name: str) -> dict:
+    """Pair a phone. Returns {'id', 'name', 'created_at', 'token'}. The plaintext token exists only in this return value:
+    the database keeps its hash, so it can never be shown again."""
+    name = re.sub(r"\s+", " ", name or "").strip()
+    if not name:
+        raise RectifiError("Give the phone a name, like 'My Android'.")
+    if len(name) > DEVICE_NAME_MAX:
+        raise RectifiError(f"Keep the name to {DEVICE_NAME_MAX} characters or fewer.")
+    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    with connect() as conn:
+        row = conn.execute(
+            "INSERT INTO phone_devices (name, token_hash) VALUES (%s, %s) RETURNING id, name, created_at",
+            (name, _hash_token(token)),
+        ).fetchone()
+    return {**row, "token": token}
+
+
+def list_devices() -> list[dict]:
+    """Paired phones, active ones first. Never includes the token or its hash."""
+    with connect() as conn:
+        return conn.execute(
+            """SELECT id, name, created_at, last_seen_at, revoked_at FROM phone_devices
+               ORDER BY (revoked_at IS NOT NULL), id"""
+        ).fetchall()
+
+
+def revoke_device(device_id: int) -> bool:
+    """Stop accepting SMS from this phone. True if it was active."""
+    with connect() as conn:
+        return conn.execute(
+            "UPDATE phone_devices SET revoked_at = now() WHERE id = %s AND revoked_at IS NULL RETURNING id", (device_id,)
+        ).fetchone() is not None
+
+
+def authenticate_device(token: str | None) -> dict | None:
+    """The device this token belongs to, or None (unknown or revoked). A good token also updates last_seen_at.
+
+    The hash of the presented token is compared with every stored hash using hmac.compare_digest, with no early
+    exit, so the time taken does not hint at which part matched."""
+    if not token or len(token) > 200:
+        return None
+    digest = _hash_token(token)
+    with connect() as conn:
+        match = None
+        for row in conn.execute("SELECT id, name, token_hash, revoked_at FROM phone_devices").fetchall():
+            if hmac.compare_digest(row["token_hash"], digest):
+                match = row
+        if match is None or match["revoked_at"] is not None:
+            return None
+        conn.execute("UPDATE phone_devices SET last_seen_at = now() WHERE id = %s", (match["id"],))
+    return {"id": match["id"], "name": match["name"]}
+
+
+def _sms_digest(sender: str | None, text: str, sent_at: datetime | None) -> str:
+    """Identifies one SMS. The phone's own timestamp (milliseconds) separates two identical texts;
+    without one, the same text on the same day counts as the same SMS."""
+    stamp = str(int(sent_at.timestamp() * 1000)) if sent_at else f"day:{today()}"
+    return hashlib.sha256(f"{sender or ''}|{stamp}|{text}".encode("utf-8")).hexdigest()
+
+
+def _sms_account(parsed) -> int | None:
+    """The account an SMS belongs to: the one whose last 4 digits it names; with no digits in the SMS, the only
+    account if there is just one. An SMS that names an account Rectifi doesn't know is not attached by guess,
+    unless the only account has no last 4 digits saved (then nothing contradicts it)."""
+    accounts = list_accounts()
+    if parsed.account_last4:
+        for a in accounts:
+            if a["last4"] and a["last4"][-4:] == parsed.account_last4:
+                return a["id"]
+        return only_account_id() if len(accounts) == 1 and not accounts[0]["last4"] else None
+    return only_account_id()
+
+
+NOT_A_TRANSACTION_SMS = "That doesn't look like a transaction SMS — no amount, or no debited/credited wording."
+
+
+def preview_pasted_sms(text: str) -> dict | None:
+    """What the Add page's Paste SMS box would save, or None if the text isn't a transaction SMS. Nothing is written.
+
+    The account is matched the same way the phone gateway does it (_sms_account)."""
+    parsed = parse_sms(text or "")
+    if parsed is None:
+        return None
+    account_id = _sms_account(parsed)
+    account = next((a for a in list_accounts() if a["id"] == account_id), None)
+    return {
+        "amount": parsed.amount, "direction": parsed.direction, "txn_date": parsed.txn_date, "payee": parsed.payee,
+        "upi_ref": parsed.upi_ref, "account_last4": parsed.account_last4,
+        "account": {"id": account["id"], "name": account["name"], "last4": account["last4"]} if account else None,
+        "warnings": list(parsed.warnings),
+    }
+
+
+def save_pasted_sms(text: str) -> dict:
+    """Save the SMS the person pasted. Returns what add_transaction returns. Same rules as preview_pasted_sms."""
+    parsed = parse_sms(text or "")
+    if parsed is None:
+        raise RectifiError(NOT_A_TRANSACTION_SMS)
+    return add_transaction(parsed.amount, parsed.direction, parsed.txn_date, payee=parsed.payee,
+                           account=_sms_account(parsed), source="sms", upi_ref=parsed.upi_ref, raw_text=text)
+
+
+def _to_inbox(device_id, sender, text, sent_at, digest, reason) -> dict:
+    with connect() as conn:
+        row = conn.execute(
+            """INSERT INTO sms_inbox (device_id, sender, raw_text, sent_at, reason, text_hash)
+               VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (text_hash) DO NOTHING RETURNING id""",
+            (device_id, sender, text, sent_at, reason, digest),
+        ).fetchone()
+    return {"status": "duplicate"} if row is None else {"status": "needs_review", "inbox_id": row["id"], "reason": reason}
+
+
+def ingest_sms(device_id: int | None, sender: str | None, text: str, sent_at: datetime | None = None) -> dict:
+    """One SMS forwarded by a phone -> {'status': 'added' | 'duplicate' | 'ignored' | 'needs_review', ...}.
+
+    added         a clear debit/credit SMS became a transaction (source 'sms', account matched by last 4 digits)
+    duplicate     the same SMS (or the same UPI reference) is already here
+    ignored       OTP, offer, chat or anything that is not a transaction. Nothing is stored.
+    needs_review  it looks like a bank SMS but the fixed rules are not sure. Kept in the inbox for a person.
+    """
+    text = (text or "").strip()[:SMS_TEXT_MAX]
+    sender = (sender or "").strip()[:64] or None
+    verdict = classify_sms(text, sender)
+    if verdict.kind == "ignored":
+        return {"status": "ignored", "reason": verdict.reason}
+    digest = _sms_digest(sender, text, sent_at)
+    if verdict.kind == "review":
+        return _to_inbox(device_id, sender, text, sent_at, digest, verdict.reason)
+    parsed = verdict.parsed
+    when = parsed.txn_date or (min(sent_at.date(), today()) if sent_at else today())
+    try:
+        account_id = _sms_account(parsed)
+        with connect() as conn:
+            fresh = conn.execute(
+                "INSERT INTO sms_seen (text_hash) VALUES (%s) ON CONFLICT DO NOTHING RETURNING text_hash", (digest,)
+            ).fetchone()
+            if fresh is None:
+                return {"status": "duplicate"}
+            result = add_transaction(parsed.amount, parsed.direction, when, payee=parsed.payee, account=account_id,
+                                     source="sms", upi_ref=parsed.upi_ref, raw_text=text, _conn=conn)
+    except RectifiError as exc:             # for example a date in the future: a person should look at it
+        return _to_inbox(device_id, sender, text, sent_at, digest, str(exc))
+    return {"status": result["status"], "transaction": result["transaction"]}
+
+
+def list_inbox(status: str = "pending", limit: int = 200) -> list[dict]:
+    """SMS waiting for a person ('pending' = Needs review), newest first."""
+    with connect() as conn:
+        return conn.execute(
+            """SELECT i.id, i.sender, i.raw_text, i.sent_at, i.received_at, i.status, i.reason, d.name AS device
+               FROM sms_inbox i LEFT JOIN phone_devices d ON d.id = i.device_id
+               WHERE i.status = %s ORDER BY i.received_at DESC, i.id DESC LIMIT %s""",
+            (status, max(1, min(int(limit), 1000))),
+        ).fetchall()
+
+
+def dismiss_inbox_item(item_id: int) -> bool:
+    with connect() as conn:
+        return conn.execute(
+            "UPDATE sms_inbox SET status = 'dismissed' WHERE id = %s AND status = 'pending' RETURNING id", (item_id,)
+        ).fetchone() is not None
+
+
+def mark_inbox_added(item_id: int) -> bool:
+    """Call after the person saved the entry on the Add page."""
+    with connect() as conn:
+        return conn.execute(
+            "UPDATE sms_inbox SET status = 'added' WHERE id = %s AND status = 'pending' RETURNING id", (item_id,)
+        ).fetchone() is not None
+
+
+def inbox_prefill(item_id: int) -> dict:
+    """What the Add form should start with for an inbox item. Fixed rules only; a person checks and saves.
+    Returns amount, direction, txn_date, payee, upi_ref, account_id (each may be None), plus raw_text and inbox_id."""
+    with connect() as conn:
+        item = conn.execute("SELECT id, raw_text FROM sms_inbox WHERE id = %s", (item_id,)).fetchone()
+    if item is None:
+        raise RectifiError(f"No inbox item #{item_id}.")
+    guess = best_effort_sms(item["raw_text"])
+    account_id = None
+    if guess["account_last4"]:
+        account_id = next((a["id"] for a in list_accounts() if a["last4"] and a["last4"][-4:] == guess["account_last4"]), None)
+    elif (only := only_account_id()) is not None:
+        account_id = only
+    if guess["txn_date"] and guess["txn_date"] > today():
+        guess["txn_date"] = None
+    return {**guess, "account_id": account_id, "raw_text": item["raw_text"], "inbox_id": item["id"]}

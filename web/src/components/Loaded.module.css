@@ -1,0 +1,6 @@
+.stale { opacity: 0.55; transition: opacity var(--d-base) var(--ease-out); }
+.fresh { transition: opacity var(--d-base) var(--ease-out); }
+.down { max-width: 36rem; padding: var(--s-5) 0; display: grid; gap: var(--s-4); justify-items: start; }
+.down h1 { font-size: var(--t-2xl); line-height: var(--t-2xl-lh); font-weight: 600; }
+.down p { color: var(--c-muted); }
+.retryNote { font-size: var(--t-sm); }

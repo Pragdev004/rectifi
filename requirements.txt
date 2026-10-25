@@ -1,0 +1,40 @@
+# Rectifi: exact versions this project was built and tested with (Python 3.13).
+# Install with:  pip install -r requirements.txt
+
+# app
+streamlit==1.66.0
+altair==6.3.0
+pandas==3.0.5
+openpyxl==3.1.5
+python-dotenv==1.2.3
+httpx==0.28.1
+
+# PDF statements (reads the PDF's own text layer; no OCR)
+pdfplumber==0.11.10
+
+# phone SMS gateway (the web server your phone posts bank SMS to). Streamlit already installs both;
+# they are pinned here because Rectifi now uses them directly.
+starlette==1.7.0
+uvicorn==0.54.0
+
+# the web app (rectifi/api): statement uploads are multipart forms. Streamlit and mcp already install it; pinned because
+# Rectifi now uses it directly.
+python-multipart==0.0.32
+
+# database
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.3
+
+# agent
+langchain-core==1.6.12
+langgraph==1.2.16
+langgraph-checkpoint-postgres==3.2.0
+langchain-deepseek==1.1.1
+langchain-ollama==1.1.0
+langchain-openai==1.7.2
+
+# MCP server
+mcp==2.3.0
+
+# tests
+pytest==9.1.1

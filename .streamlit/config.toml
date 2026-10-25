@@ -1,0 +1,60 @@
+[server]
+runOnSave = true
+# Rectifi holds your money: listen on this laptop only. Your phone reaches it through `python scripts/dev.py tailscale`
+# (Tailscale Serve: an HTTPS proxy on this laptop that only your own devices can use), never by opening the Wi-Fi.
+# 127.0.0.1 and not "localhost": on Windows "localhost" can mean ::1, and Tailscale Serve proxies to the IPv4 address.
+address = "127.0.0.1"
+# Both protections stay ON (these are Streamlit's defaults; they are written down so nobody switches them off to "fix" a proxy).
+# They work behind Tailscale Serve: the browser's address and the Host header are the same MagicDNS name (same-origin).
+enableXsrfProtection = true
+enableCORS = true
+# Only these Host names may open a connection (protects against DNS rebinding). Tailscale MagicDNS names end in .ts.net.
+# If you use a custom domain in front of Tailscale, add it here.
+allowedHosts = ["localhost", "127.0.0.1", "*.ts.net"]
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+# ── Passbook theme ─────────────────────────────────────────────
+# Warm paper, ink text, one ink-teal accent. Amber = near a limit, brick = over.
+# Fonts: IBM Plex Sans (body), Fraunces (headings), IBM Plex Mono (numbers, tabular figures).
+
+[theme]
+font = "IBM Plex Sans:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+headingFont = "Fraunces:https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap"
+codeFont = "IBM Plex Mono:https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
+headingFontWeights = [600, 600, 500, 500, 500, 500]
+baseRadius = "6px"
+showWidgetBorder = true
+chartCategoricalColors = ["#1F4E5F", "#B7791F", "#6B7F4E", "#8E5A7A", "#4A6FA5", "#A0522D", "#5E7C7A", "#7A6A55"]
+
+[theme.light]
+primaryColor = "#1F4E5F"
+backgroundColor = "#F6F2E9"
+secondaryBackgroundColor = "#ECE5D6"
+textColor = "#1D1B16"
+borderColor = "#D9D0BE"
+linkColor = "#1F4E5F"
+redColor = "#9B2C2C"
+orangeColor = "#B7791F"
+greenColor = "#3F6B4F"
+
+[theme.light.sidebar]
+backgroundColor = "#EFE9DC"
+
+[theme.dark]
+primaryColor = "#7FBACB"
+backgroundColor = "#17150F"
+secondaryBackgroundColor = "#221F18"
+textColor = "#ECE6D8"
+borderColor = "#3A352C"
+linkColor = "#7FBACB"
+redColor = "#E07A6B"
+orangeColor = "#E0A64A"
+greenColor = "#8DBA98"
+
+[theme.dark.sidebar]
+backgroundColor = "#1C1A14"

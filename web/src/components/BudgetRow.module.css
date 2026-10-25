@@ -1,0 +1,16 @@
+.row { padding: var(--s-3) 0; border-bottom: 1px solid var(--c-rule); }
+.row:last-child { border-bottom: 0; }
+.top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
+.name { font-weight: 600; display: inline-flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.nums { font-size: var(--t-sm); line-height: var(--t-sm-lh); color: var(--c-muted); }
+.nums strong { color: var(--c-text); font-weight: 500; }
+.bar { position: relative; height: 10px; margin: var(--s-2) 0 var(--s-1); background: var(--c-rule); border-radius: 5px; }
+.fill { position: absolute; inset: 0 auto 0 0; background: var(--c-accent); border-radius: 5px; }
+.fill.near { background: var(--c-near); }
+.fill.over { background: var(--c-over); }
+.animate .fill { transition: width var(--d-slow) var(--ease-out); }
+.tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--c-text); opacity: 0.55; border-radius: 1px; }
+.meta { font-size: var(--t-sm); line-height: var(--t-sm-lh); color: var(--c-muted); }
+.meta .overText { color: var(--c-over); font-weight: 500; }
+.legend { font-size: var(--t-sm); color: var(--c-muted); margin-bottom: var(--s-2); }
+.legend .tickKey { display: inline-block; width: 2px; height: 12px; background: var(--c-text); opacity: 0.55; vertical-align: -2px; margin-right: 6px; }

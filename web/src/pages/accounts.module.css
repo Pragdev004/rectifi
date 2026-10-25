@@ -1,0 +1,15 @@
+.layout { display: grid; gap: var(--s-7); }
+@media (min-width: 1024px) { .layout { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--s-8); align-items: start; } }
+.list { display: grid; gap: var(--s-7); }
+.account { display: grid; gap: var(--s-3); justify-items: start; }
+.account > * { max-width: 100%; }
+.account > div:has(table), .account > div[data-testid] { width: 100%; }
+.account [data-testid="recon-slip"] { width: 100%; }
+.name { font-size: var(--t-xl); line-height: var(--t-xl-lh); font-weight: 500; }
+.digits { font-family: var(--font-figures); font-size: var(--t-md); font-weight: 400; color: var(--c-muted); }
+.meta { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); margin-top: calc(-1 * var(--s-2)); }
+.reason { color: var(--c-muted); max-width: 36rem; }
+.balanceForm { display: grid; gap: var(--s-4); width: 100%; max-width: 26rem; padding: var(--s-4); background: var(--c-raised); border: 1px solid var(--c-rule); border-radius: var(--r-2); }
+.formActions { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.addForm { display: grid; gap: var(--s-4); }
+@media (min-width: 1024px) { .addForm { position: sticky; top: var(--s-5); } }
