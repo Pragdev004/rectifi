@@ -41,3 +41,6 @@ backups/
 
 # Alerts: the VAPID private key for Web Push lives here (0600). Never commit.
 .rectifi/
+
+# a symlink to the main checkout's node_modules (a slash-less pattern matches a symlink)
+web/node_modules

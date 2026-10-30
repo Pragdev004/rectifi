@@ -760,7 +760,7 @@ def in_quiet_hours(now: datetime, prefs: dict) -> bool:
 
 
 def _pushed_since(conn, cutoff: datetime) -> int:
-    return conn.execute("SELECT COUNT(DISTINCT COALESCE(pushed_at, created_at)) AS n FROM alerts "
+    return conn.execute("SELECT COUNT(*) AS n FROM alerts "
                         "WHERE push_state IN ('pending', 'sending', 'sent') AND COALESCE(pushed_at, created_at) >= %s", (cutoff,)).fetchone()["n"]
 
 
@@ -864,7 +864,7 @@ def _push_all(title: str, body: str, url: str, tag: str | None, urgency: str = "
     result = {"devices": len(subs), "ok": 0, "gone": 0, "retry": 0}
     if not subs:
         return result
-    payload = webpush.build_payload(_safe_text(title), _safe_text(body), url, tag)
+    payload = webpush.build_payload(_safe_text(title), _safe_text(body), url, _safe_text(tag) if tag else None)
     outcome: dict[int, str] = {}
     for sub in subs:
         verdict = webpush.send(sub, payload, ttl=PUSH_TTL_SECONDS, urgency=urgency, client=client)
@@ -996,6 +996,7 @@ def _digest(prefs: dict, now: datetime) -> int:
     total = sum((r["amount"] for r in spent), Decimal(0))
     safe = safe_to_spend(ctx)
     numbers: dict[str, Decimal] = {"payment_count": Decimal(len(spent)), "day_total": _whole(total)}
+    word = "payment" if len(spent) == 1 else "payments"
     tail = ""
     if safe:
         if safe["left_today"] >= 0:
@@ -1004,8 +1005,8 @@ def _digest(prefs: dict, now: datetime) -> int:
         else:
             numbers["safe_over"] = _whole(-safe["left_today"])
             tail = f" That is {_rs(-safe['left_today'])} more than the safe amount for today."
-    a = Alert("digest", "info", f"Today you spent {_rs(total)}", f"{len(spent)} payments today, {_rs(total)} in total.{tail}", numbers,
-              f"digest:{ctx.today.isoformat()}", "Today's spending", f"{_rs(total)} across {len(spent)} payments.")
+    a = Alert("digest", "info", f"Today you spent {_rs(total)}", f"{len(spent)} {word} today, {_rs(total)} in total.{tail}", numbers,
+              f"digest:{ctx.today.isoformat()}", "Today's spending", f"{_rs(total)} across {len(spent)} {word}.")
     with connect() as conn:
         written = _insert(conn, a, _gate(conn, a, prefs, now), now) is not None
         if written:
