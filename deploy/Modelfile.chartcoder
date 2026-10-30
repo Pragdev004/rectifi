@@ -1,0 +1,6 @@
+# rectifi-chartcoder: a code model for the chart harness (it writes the chart code; the harness checks and runs it).
+# Built by:  python scripts/dev.py ollama-setup      (FROM below is the 12-16 GB laptop choice; the command swaps it for your RAM tier)
+FROM qwen2.5-coder:7b
+SYSTEM """You write short, correct Python that draws one chart from the data the message gives you. Reply with the code only, in one code block, and no explanation. Use only the libraries and variables the message names. Never read files, use the network, or run other programs."""
+PARAMETER temperature 0
+PARAMETER num_ctx 8192
