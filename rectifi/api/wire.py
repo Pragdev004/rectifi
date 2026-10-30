@@ -186,7 +186,31 @@ def batch_summary(counts: dict) -> dict:
 # ═══ WS-CLASSIFY: end ═══
 
 # ═══ WS-CHARTS: begin ═══
-# wire shapes for saved charts (images as URLs or base64, never money maths).
+# Saved charts. Images travel as base64 text in the JSON (an <img> tag can't send the X-Rectifi-Request header, so a URL
+# would be refused); the page shows them as data: URLs, which the CSP allows. There is no money here: every rupee figure is
+# already inside the PNG, written by the chart's own inr() calls and checked by rectifi/charts/checks.py.
+
+def chart_summary(row: dict, *, thumb: str | None = None) -> dict:
+    checks = row.get("checks") or {}
+    return {
+        "id": row["id"], "title": row["title"], "prompt": row["prompt"], "kind": row["kind"], "pinned": bool(row["pinned"]),
+        "period_start": row["period_start"], "period_end": row["period_end"], "model": row["model"], "attempts": row["attempts"],
+        "created_at": row["created_at"], "refreshed_at": row["refreshed_at"], "ok": bool(checks.get("ok", True)),
+        "thumb": thumb,
+    }
+
+
+def chart_detail(row: dict, alt: str, *, b64) -> dict:
+    """`b64` turns PNG bytes into text (rectifi.charts.run.b64), passed in so this module stays free of the charts package."""
+    checks = row.get("checks") or {}
+    return {
+        **chart_summary(row),
+        "code": row.get("code", ""), "trace": row.get("trace") or [],
+        "checks": [{"name": c["name"], "ok": c["ok"], "detail": c["detail"]} for c in checks.get("checks", [])],
+        "entries": checks.get("entries", 0), "alt": alt,
+        "image_light": b64(bytes(row["image_light"])) if row.get("image_light") else None,
+        "image_dark": b64(bytes(row["image_dark"])) if row.get("image_dark") else None,
+    }
 # ═══ WS-CHARTS: end ═══
 
 # ═══ WS-CHAT: begin ═══
