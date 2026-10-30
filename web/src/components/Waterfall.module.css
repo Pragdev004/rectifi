@@ -1,0 +1,26 @@
+.list { list-style: none; margin: 0; padding: 0; }
+.row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 9.5rem) minmax(0, 1fr) minmax(5.5rem, auto);
+  gap: var(--s-3);
+  align-items: center;
+  min-height: 44px;
+  padding: var(--s-1) 0;
+  border-bottom: 1px solid var(--c-rule);
+}
+.label { font-weight: 600; font-size: var(--t-sm); line-height: var(--t-sm-lh); }
+.svg { display: block; width: 100%; height: 18px; }
+.track { fill: var(--c-sunk); }
+.bar { fill: var(--c-muted); }
+.income { fill: var(--c-accent); }
+.left { fill: var(--c-ok); }
+.quick, .food, .shopping { fill: var(--c-over); }
+.big { fill: var(--c-near); }
+.fixed { fill: var(--c-rule-strong); }
+.other { fill: var(--c-subtle); }
+.amount { display: grid; justify-items: end; text-align: right; font-size: var(--t-sm); }
+.count { color: var(--c-muted); font-size: var(--t-xs); line-height: var(--t-xs-lh); }
+@media (max-width: 479.98px) {
+  .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: var(--s-1); }
+  .svg { grid-column: 1 / -1; grid-row: 2; }
+}
