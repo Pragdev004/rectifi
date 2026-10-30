@@ -253,7 +253,7 @@ def test_waterfall_top_merchants_with_percent_of_income():
     rep = alerts.leak_report(ctx(), date(2026, 10, 1))
     top = rep["merchants"][0]
     assert top["merchant"] == "Swiggy" and top["orders"] == 3 and top["total"] == D(1500) and top["pct_of_income"] == D("1.5")
-    assert rep["projection"]["spent"] == D(2500) and rep["projection"]["projected"] == D("3690.48")        # 2,500 x 31 / 21
+    assert rep["projection"]["spent"] == D(1750) and rep["projection"]["projected"] == D("2583.33")        # 1,750 x 31 / 21
 
 
 def test_waterfall_without_income_has_no_income_or_left():
