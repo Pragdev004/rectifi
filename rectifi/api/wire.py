@@ -261,3 +261,62 @@ def rag_answer(out: dict) -> dict:
             "unverified": list(out.get("unverified", [])), "support": out.get("support"), "useful": out.get("useful"),
             "route": out.get("route"), "mode": out.get("mode"), "abstained": bool(out.get("abstained"))}
 # ═══ WS-RAG: end ═══
+
+
+# ───────────────────────── alerts and leaks ─────────────────────────
+
+_ALERT_COUNT_SUFFIXES = ("_count", "_pct")
+
+
+def alert_number(key: str, value: Decimal) -> str:
+    return format(value.normalize(), "f") if key.endswith(_ALERT_COUNT_SUFFIXES) else money(value)
+
+
+def alert(row: dict) -> dict:
+    return {
+        "id": row["id"], "kind": row["kind"], "severity": row["severity"], "title": row["title"], "detail": row["detail"],
+        "numbers": {k: alert_number(k, v) for k, v in row["numbers"].items()},
+        "created_at": row["created_at"].isoformat(), "read_at": row["read_at"].isoformat() if row["read_at"] else None,
+        "is_read": row["read_at"] is not None, "push_state": row["push_state"],
+        "can_snooze": row["rule_id"] is not None or bool(row["scope_key"]), "has_rule": row["rule_id"] is not None,
+    }
+
+
+def rule(row: dict) -> dict:
+    return {"id": row["id"], "scope": row["scope"], "target": row["target"], "period": row["period"], "cap": money(row["cap"]),
+            "muted": row["muted"], "snoozed_until": row["snoozed_until"].isoformat() if row["snoozed_until"] else None}
+
+
+def today_view(view: dict, income: dict) -> dict:
+    safe = view["safe"]
+    return {
+        "today": view["today"].isoformat(), "unread": view["unread"],
+        "small_spends": [{"txn_id": s["txn_id"], "label": s["label"], "group": s["group"], "amount": money(s["amount"])} for s in view["small_spends"]],
+        "income": {"amount": money(income["amount"]), "source": income["source"]},
+        "safe": None if safe is None else {
+            "spendable": money(safe["spendable"]), "source": safe["source"], "spent_before_today": money(safe["spent_before_today"]),
+            "committed": money(safe["committed"]),
+            "committed_items": [{"name": i["name"], "amount": money(i["amount"]), "day": i["day"]} for i in safe["committed_items"]],
+            "days_left": safe["days_left"], "daily": money(safe["daily"]), "spent_today": money(safe["spent_today"]),
+            "left_today": money(safe["left_today"]), "over_today": safe["over_today"],
+        },
+    }
+
+
+def projection(p: dict | None) -> dict | None:
+    if p is None:
+        return None
+    return {"spent": money(p["spent"]), "day": p["day"], "days_in_month": p["days_in_month"], "projected": money(p["projected"]),
+            "income": money(p["income"]), "pct_of_income": pct(p["pct_of_income"])}
+
+
+def leak_report(r: dict) -> dict:
+    return {
+        "month": month_text(r["month"]), "income": money(r["income"]), "income_source": r["income_source"], "spent": money(r["spent"]),
+        "left": money(r["left"]),
+        "segments": [{"key": s["key"], "label": s["label"], "kind": s["kind"], "amount": money(s["amount"]), "start": money(s["start"]),
+                      "end": money(s["end"]), "count": s["count"]} for s in r["segments"]],
+        "merchants": [{"merchant": e["merchant"], "group": e["group"], "orders": e["orders"], "total": money(e["total"]),
+                       "pct_of_income": pct(e["pct_of_income"])} for e in r["merchants"]],
+        "projection": projection(r["projection"]),
+    }

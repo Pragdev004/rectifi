@@ -498,9 +498,10 @@ def streak_alerts(ctx: Context, new: list[dict] | None = None) -> list[Alert]:
 
 # ───────────────────────── income, projection, safe to spend ─────────────────────────
 
-def income(ctx: Context) -> dict:
-    """{'amount', 'source', 'month'}. Precedence: what you typed > salary credits of the latest month within 45 days > nothing."""
-    manual = ctx.prefs.get("monthly_income")
+def income(ctx: Context, *, ignore_manual: bool = False) -> dict:
+    """{'amount', 'source', 'month'}. Precedence: what you typed > salary credits of the latest month within 45 days > nothing.
+    `ignore_manual` shows what would be detected from salary alone (the Delivery tab prints it next to the box you type in)."""
+    manual = None if ignore_manual else ctx.prefs.get("monthly_income")
     if manual:
         return {"amount": parse_amount(manual), "source": "manual", "month": None}
     since = ctx.today - timedelta(days=INCOME_LOOKBACK_DAYS)

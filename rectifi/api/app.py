@@ -25,7 +25,7 @@ from starlette.staticfiles import StaticFiles
 from .. import config
 from ..db import init_db
 from .errors import DB_ERRORS, EXCEPTION_HANDLERS
-from .routes import (accounts, ask, auth, budgets, charts, chat, classify, imports, insights, knowledge, memory, meta, models,
+from .routes import (accounts, alerts as alerts_routes, ask, auth, budgets, charts, chat, classify, imports, insights, knowledge, memory, meta, models,
                      overview, phone, review, traces, transactions)
 from .security import ApiGuard, BodyLimit, HostGuard, SecurityHeaders, TailscaleLock, install_session_lock
 
@@ -54,7 +54,7 @@ class ImmutableFiles(StaticFiles):
 def api_routes() -> list[Route]:
     found = []
     for module in (meta, overview, review, insights, transactions, imports, budgets, accounts, phone, ask,
-                   classify, charts, chat, memory, traces, models, auth, knowledge):
+                   classify, charts, chat, memory, traces, models, auth, knowledge, alerts_routes):
         found += module.routes
     return found
 
