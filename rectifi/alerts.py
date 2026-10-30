@@ -25,6 +25,8 @@ from __future__ import annotations
 import calendar
 import json
 import logging
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
@@ -78,6 +80,7 @@ PREF_DEFAULTS = {
     "spend_plan": None,
     "snooze_until": None,
     "muted_kinds": [],
+    "muted_scopes": [],
     "snoozed_scopes": {},
 }
 
@@ -149,9 +152,19 @@ def _ceil_to(value: Decimal, step: Decimal = ROUND_TO) -> Decimal:
 
 # ───────────────────────── preferences ─────────────────────────
 
-def get_prefs() -> dict:
-    with connect() as conn:
-        row = conn.execute("SELECT value FROM app_settings WHERE key = 'alerts.prefs'").fetchone()
+@contextmanager
+def _use(conn=None):
+    """Use the given connection, or borrow one. A sweep passes its own so it never needs a second one while holding the lock."""
+    if conn is not None:
+        yield conn
+    else:
+        with connect() as own:
+            yield own
+
+
+def get_prefs(conn=None) -> dict:
+    with _use(conn) as c:
+        row = c.execute("SELECT value FROM app_settings WHERE key = 'alerts.prefs'").fetchone()
     saved = row["value"] if row and isinstance(row["value"], dict) else {}
     return {**PREF_DEFAULTS, **{k: v for k, v in saved.items() if k in PREF_DEFAULTS}}
 
@@ -318,7 +331,7 @@ def delete_rule(rule_id: int) -> bool:
 
 # ───────────────────────── reading the ledger ─────────────────────────
 
-def build_context(today: date | None = None, since: date | None = None) -> Context:
+def build_context(today: date | None = None, since: date | None = None, conn=None) -> Context:
     """Everything the pure rules need, read once: six months of transactions (each tagged with its merchant), the caps, this
     month's budgets and the settings."""
     from . import tools
@@ -326,22 +339,23 @@ def build_context(today: date | None = None, since: date | None = None) -> Conte
     today = today or tools.today()
     m0 = today.replace(day=1)
     start = min(_shift(m0, 5), since) if since else _shift(m0, 5)
-    patterns = merchants.user_patterns()
-    with connect() as conn:
-        rows = conn.execute(
+    with _use(conn) as c:
+        patterns = merchants.user_patterns(c)
+        rows = c.execute(
             """SELECT t.id, t.txn_date, t.amount, t.direction, t.payee, t.description, t.account_id, t.import_batch_id,
                       c.name AS category, c.kind AS kind
                FROM transactions t JOIN categories c ON c.id = t.category_id
                WHERE t.txn_date BETWEEN %s AND %s ORDER BY t.txn_date, t.id""", (start, today)).fetchall()
-        first = conn.execute("SELECT MIN(txn_date) AS d FROM transactions").fetchone()["d"]
-        rules = conn.execute("SELECT id, scope, target, period, cap, muted, snoozed_until FROM alert_rules ORDER BY id").fetchall()
-        budgets = {r["category"]: r["limit_amount"] for r in conn.execute(
+        first = c.execute("SELECT MIN(txn_date) AS d FROM transactions").fetchone()["d"]
+        rules = c.execute("SELECT id, scope, target, period, cap, muted, snoozed_until FROM alert_rules ORDER BY id").fetchall()
+        budgets = {r["category"]: r["limit_amount"] for r in c.execute(
             "SELECT c.name AS category, b.limit_amount FROM budgets b JOIN categories c ON c.id = b.category_id WHERE b.month = %s", (m0,)).fetchall()}
+        prefs = get_prefs(c)
     for r in rows:
         found = merchants.match(r["payee"], r["description"], user=patterns)
         r["merchant"] = found.name if found else None
         r["grp"] = found.group if found else None
-    ctx = Context(today=today, m0=m0, rows=rows, first_data=first, rules=rules, budgets=budgets, prefs=get_prefs(), patterns=patterns)
+    ctx = Context(today=today, m0=m0, rows=rows, first_data=first, rules=rules, budgets=budgets, prefs=prefs, patterns=patterns)
     ctx.spend = [r for r in rows if r["direction"] == "debit" and r["kind"] == "expense"]
     return ctx
 
@@ -381,7 +395,7 @@ def active_caps(ctx: Context) -> list[Cap]:
             continue
         caps.append(Cap(r["scope"], r["target"], r["period"], r["cap"], r["id"]))
     for category, limit in sorted(ctx.budgets.items()):
-        if ("category", category, "month") not in explicit:
+        if ("category", category, "month") not in explicit and not scope_quiet(ctx.prefs, f"category:{category}:month"):
             caps.append(Cap("category", category, "month", limit))
     return caps
 
@@ -442,6 +456,11 @@ def cap_alerts(ctx: Context, new: list[dict] | None = None) -> list[Alert]:
 
 # ───────────────────────── streaks ─────────────────────────
 
+def scope_quiet(prefs: dict, scope_key: str) -> bool:
+    """A scope you muted, or snoozed and the time has not come yet. Used for alerts that have no rule row (budgets, streaks)."""
+    return scope_key in (prefs.get("muted_scopes") or []) or _still_snoozed((prefs.get("snoozed_scopes") or {}).get(scope_key))
+
+
 def _still_snoozed(until: str | None) -> bool:
     if not until:
         return False
@@ -457,10 +476,9 @@ def streak_alerts(ctx: Context, new: list[dict] | None = None) -> list[Alert]:
     start = week_start(ctx.today)
     names = {r["merchant"] for r in (new if new is not None else ctx.spend) if r["merchant"] and r["txn_date"] >= start}
     found = []
-    snoozed = ctx.prefs.get("snoozed_scopes") or {}
     for name in sorted(names):
         scope_key = f"streak:{name}"
-        if _still_snoozed(snoozed.get(scope_key)):
+        if scope_quiet(ctx.prefs, scope_key):
             continue
         rows = [r for r in ctx.spend if r["merchant"] == name and start <= r["txn_date"] <= start + timedelta(days=6)]
         tiers = [t for t in STREAK_TIERS if len(rows) >= t]
@@ -671,3 +689,473 @@ def _clock() -> datetime:
 
 def _now_naive() -> datetime:
     return _clock().replace(tzinfo=None)
+
+
+# ═════════════════════════ Part 2: side effects ═════════════════════════
+# Everything below writes: the sweep (new debits -> alerts), delivery (Web Push), the 60-second tick, and the inbox.
+
+import re  # noqa: E402
+import threading  # noqa: E402
+
+from . import tools, webpush  # noqa: E402
+
+WATERMARK_KEY = "alerts.watermark"
+BASELINE_AGE_MINUTES = 10
+_RANK = {"act": 0, "watch": 1, "info": 2}
+_DIGITS = re.compile(r"(?<![₹\d,.])\d{4,}")
+_HANDLE = re.compile(r"@\S+")
+PRIVATE_TITLE, PRIVATE_BODY = "Rectifi", "New spending alert"
+
+
+def _numbers_json(numbers: dict) -> str:
+    return json.dumps({k: str(v) for k, v in numbers.items()})
+
+
+def _numbers_back(raw) -> dict[str, Decimal]:
+    return {k: Decimal(str(v)) for k, v in (raw or {}).items()}
+
+
+def _safe_text(text: str) -> str:
+    """Last defence for text that leaves the laptop: no @handle and no run of 4+ digits (a UPI ref, a card or phone number).
+    A rupee amount is kept: a digit run right after the rupee sign is allowed."""
+    return " ".join(_DIGITS.sub("…", _HANDLE.sub("", text)).split())
+
+
+# ───────────────────────── the watermark ─────────────────────────
+
+def _read_watermark(conn) -> int | None:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = %s", (WATERMARK_KEY,)).fetchone()
+    return int(row["value"]["txn_id"]) if row else None
+
+
+def _write_watermark(conn, txn_id: int) -> None:
+    conn.execute("INSERT INTO app_settings (key, value) VALUES (%s, %s::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                 (WATERMARK_KEY, json.dumps({"txn_id": int(txn_id)})))
+
+
+def _baseline(conn) -> int:
+    """The first sweep ever: payments that were already here (dated before the real-time window, or stored a while ago) are history, not news."""
+    row = conn.execute("SELECT COALESCE(MAX(id), 0) AS top FROM transactions WHERE txn_date < %s OR created_at < %s",
+                       (tools.today() - timedelta(days=REALTIME_DAYS), _clock() - timedelta(minutes=BASELINE_AGE_MINUTES))).fetchone()
+    return row["top"]
+
+
+def ensure_watermark(conn=None) -> int:
+    with _use(conn) as c:
+        mark = _read_watermark(c)
+        if mark is None:
+            mark = _baseline(c)
+            _write_watermark(c, mark)
+        return mark
+
+
+# ───────────────────────── push gates ─────────────────────────
+
+def in_quiet_hours(now: datetime, prefs: dict) -> bool:
+    start, end = time.fromisoformat(prefs["quiet_start"]), time.fromisoformat(prefs["quiet_end"])
+    t = now.time().replace(second=0, microsecond=0)
+    if start == end:
+        return False
+    return start <= t < end if start < end else (t >= start or t < end)
+
+
+def _pushed_since(conn, cutoff: datetime) -> int:
+    return conn.execute("SELECT COUNT(DISTINCT COALESCE(pushed_at, created_at)) AS n FROM alerts "
+                        "WHERE push_state IN ('pending', 'sending', 'sent') AND COALESCE(pushed_at, created_at) >= %s", (cutoff,)).fetchone()["n"]
+
+
+def _gate(conn, a: Alert, prefs: dict, now: datetime) -> str:
+    """The state a fresh alert gets, by these gates in this order: push off, snooze, muted kind (skipped); quiet hours (held, sent
+    later as one push); a cooldown for the same scope (a 100% alert skips it); the hourly and daily limit (skipped).
+    A skipped alert is still in the inbox and the digest."""
+    if not prefs["push_on"] or _still_snoozed(prefs["snooze_until"]) or a.kind in prefs["muted_kinds"]:
+        return "skipped"
+    if in_quiet_hours(now.replace(tzinfo=None), prefs):
+        return "held"
+    if a.scope_key and a.threshold != 100 and prefs["cooldown_hours"]:
+        recent = conn.execute("SELECT 1 FROM alerts WHERE scope_key = %s AND push_state IN ('pending', 'sending', 'sent') "
+                              "AND COALESCE(pushed_at, created_at) >= %s LIMIT 1", (a.scope_key, now - timedelta(hours=prefs["cooldown_hours"]))).fetchone()
+        if recent:
+            return "skipped"
+    if _pushed_since(conn, now - timedelta(hours=1)) >= prefs["max_per_hour"] or _pushed_since(conn, now - timedelta(hours=24)) >= prefs["max_per_day"]:
+        return "skipped"
+    return "pending"
+
+
+def _insert(conn, a: Alert, state: str, now: datetime) -> int | None:
+    row = conn.execute(
+        """INSERT INTO alerts (dedupe_key, kind, severity, title, detail, push_title, push_body, numbers, rule_id, txn_id, scope_key, created_at, push_state)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+           ON CONFLICT (dedupe_key) DO NOTHING RETURNING id""",
+        (a.dedupe_key, a.kind, a.severity, a.title, a.detail, a.push_title, a.push_body, _numbers_json(a.numbers),
+         a.rule_id, a.txn_id, a.scope_key, now, state)).fetchone()
+    return row["id"] if row else None
+
+
+# ───────────────────────── the sweep ─────────────────────────
+
+def _bulk_alert(debits: list[dict]) -> Alert:
+    batches = {r["import_batch_id"] for r in debits}
+    ids = [r["id"] for r in debits]
+    total = sum((r["amount"] for r in debits), Decimal(0))
+    word = "payment" if len(debits) == 1 else "payments"
+    if len(batches) == 1 and None not in batches:
+        key, title = f"import:{batches.pop()}", f"{len(debits)} {word} imported"
+    else:
+        key, title = f"bulk:{min(ids)}-{max(ids)}", f"{len(debits)} {word} added at once"
+    return Alert(
+        "bulk", "info", title,
+        f"{len(debits)} {word} came in together, {_rs(total)} in all. Rectifi did not send an alert for each one. "
+        "Open Leaks to see where the money went.",
+        {"payment_count": Decimal(len(debits)), "batch_total": _whole(total)}, key,
+        title, f"{_rs(total)} in total.", txn_id=max(ids))
+
+
+def sweep(origin: str = "tick") -> dict:
+    """Look at debits newer than the watermark and write the alerts they cause. Returns {'new': alerts written, 'mode': ...}.
+
+    mode 'realtime': normal alerts (caps, streaks), pushed through the gates.
+    mode 'bulk': more than 5 debits, or any came from an import, or any is dated more than 2 days back. ONE summary alert is
+                 pushed; the cap and streak alerts are still written (so the same step never fires again) but not pushed.
+    mode 'idle' / 'busy': nothing new / another process is sweeping right now.
+    One Postgres advisory lock makes the gateway process and the web app process take turns; alerts.dedupe_key is UNIQUE, so even
+    a repeat can never write twice."""
+    with connect() as conn:
+        if not conn.execute("SELECT pg_try_advisory_xact_lock(%s) AS ok", (SWEEP_LOCK_ID,)).fetchone()["ok"]:
+            return {"new": 0, "mode": "busy"}
+        mark = ensure_watermark(conn)
+        fresh = conn.execute("SELECT t.id, t.direction, t.txn_date, t.import_batch_id, t.amount, c.kind FROM transactions t "
+                             "JOIN categories c ON c.id = t.category_id WHERE t.id > %s ORDER BY t.id", (mark,)).fetchall()
+        if not fresh:
+            return {"new": 0, "mode": "idle"}
+        top = fresh[-1]["id"]
+        debits = [r for r in fresh if r["direction"] == "debit" and r["kind"] == "expense"]
+        if not debits:
+            _write_watermark(conn, top)
+            return {"new": 0, "mode": "idle"}
+        ctx = build_context(conn=conn)
+        new_ids = {r["id"] for r in debits}
+        new = [r for r in ctx.spend if r["id"] in new_ids]
+        bulk = (len(debits) > BULK_MIN or any(r["import_batch_id"] for r in debits)
+                or any(r["txn_date"] < ctx.today - timedelta(days=REALTIME_DAYS) for r in debits))
+        found = cap_alerts(ctx, new) + streak_alerts(ctx, new)
+        found.sort(key=lambda a: _RANK[a.severity])
+        now = _clock()
+        written = 0
+        if bulk:
+            for a in found:
+                written += _insert(conn, a, "skipped", now) is not None
+            summary = _bulk_alert(debits)
+            written += _insert(conn, summary, _gate(conn, summary, ctx.prefs, now), now) is not None
+        else:
+            for a in found:
+                written += _insert(conn, a, _gate(conn, a, ctx.prefs, now), now) is not None
+        _write_watermark(conn, top)
+    log.info("alerts sweep (%s): %s alert(s), mode %s", origin, written, "bulk" if bulk else "realtime")
+    return {"new": written, "mode": "bulk" if bulk else "realtime"}
+
+
+# ───────────────────────── delivery ─────────────────────────
+
+def _push_all(title: str, body: str, url: str, tag: str | None, urgency: str = "normal", client=None) -> dict:
+    """Send one notification to every saved phone. Returns {'devices', 'ok', 'gone', 'retry'}; removes phones that are gone."""
+    with connect() as conn:
+        subs = conn.execute("SELECT id, endpoint, p256dh, auth FROM push_subscriptions ORDER BY id").fetchall()
+    result = {"devices": len(subs), "ok": 0, "gone": 0, "retry": 0}
+    if not subs:
+        return result
+    payload = webpush.build_payload(_safe_text(title), _safe_text(body), url, tag)
+    outcome: dict[int, str] = {}
+    for sub in subs:
+        verdict = webpush.send(sub, payload, ttl=PUSH_TTL_SECONDS, urgency=urgency, client=client)
+        outcome[sub["id"]] = "ok" if verdict == "ok" else ("gone" if verdict == "gone" else "retry")
+    for verdict in outcome.values():
+        result[verdict] += 1
+    with connect() as conn:
+        for sub_id, verdict in outcome.items():
+            if verdict == "gone":
+                conn.execute("DELETE FROM push_subscriptions WHERE id = %s", (sub_id,))
+            elif verdict == "ok":
+                conn.execute("UPDATE push_subscriptions SET last_ok_at = %s, fail_count = 0 WHERE id = %s", (_clock(), sub_id))
+            else:
+                conn.execute("UPDATE push_subscriptions SET fail_count = fail_count + 1 WHERE id = %s", (sub_id,))
+    return result
+
+
+def _texts(title: str, body: str, prefs: dict) -> tuple[str, str]:
+    return (PRIVATE_TITLE, PRIVATE_BODY) if prefs["private_notifications"] else (title, body)
+
+
+def deliver(client=None) -> dict:
+    """Push every 'pending' alert. Rows are claimed with FOR UPDATE SKIP LOCKED, so two processes never send the same one."""
+    prefs = get_prefs()
+    with connect() as conn:
+        claimed = conn.execute(
+            """UPDATE alerts SET push_state = 'sending', push_attempts = push_attempts + 1
+               WHERE id IN (SELECT id FROM alerts WHERE push_state = 'pending' ORDER BY id FOR UPDATE SKIP LOCKED)
+               RETURNING id, severity, push_title, push_body, scope_key, push_attempts""").fetchall()
+    sent = failed = skipped = 0
+    for row in sorted(claimed, key=lambda r: r["id"]):
+        title, body = _texts(row["push_title"], row["push_body"], prefs)
+        try:
+            result = _push_all(title, body, f"/alerts#{row['id']}", row["scope_key"] or f"alert-{row['id']}",
+                               "high" if row["severity"] == "act" else "normal", client)
+        except Exception as exc:                               # noqa: BLE001  (the row must not be left 'sending')
+            log.error("push failed (%s)", type(exc).__name__)
+            result = {"devices": 1, "ok": 0, "gone": 0, "retry": 1}
+        now = _clock()
+        with connect() as conn:
+            if result["ok"]:
+                conn.execute("UPDATE alerts SET push_state = 'sent', pushed_at = %s WHERE id = %s", (now, row["id"]))
+                sent += 1
+            elif result["retry"] and row["push_attempts"] < RETRY_MAX:
+                wait = RETRY_BACKOFF_MINUTES[min(row["push_attempts"] - 1, len(RETRY_BACKOFF_MINUTES) - 1)]
+                conn.execute("UPDATE alerts SET push_state = 'failed', next_try_at = %s WHERE id = %s", (now + timedelta(minutes=wait), row["id"]))
+                failed += 1
+            elif result["retry"]:
+                conn.execute("UPDATE alerts SET push_state = 'failed', next_try_at = NULL WHERE id = %s", (row["id"],))
+                failed += 1
+            else:                                              # no phone to tell (none saved, or all gone)
+                conn.execute("UPDATE alerts SET push_state = 'skipped' WHERE id = %s", (row["id"],))
+                skipped += 1
+    return {"sent": sent, "failed": failed, "skipped": skipped}
+
+
+def sweep_and_deliver(origin: str = "tick") -> dict:
+    """What the real-time paths call (an SMS arrived, you added a payment, an import finished). Never raises: a problem here must
+    not turn a stored payment into an error for the phone. Only the type of an error is logged."""
+    try:
+        result = sweep(origin)
+        if result["mode"] in ("realtime", "bulk"):
+            deliver()
+        return result
+    except Exception as exc:                                    # noqa: BLE001
+        log.error("alerts sweep failed (%s)", type(exc).__name__)
+        return {"new": 0, "mode": "error"}
+
+
+def kick(origin: str) -> threading.Thread | None:
+    """Run sweep_and_deliver in a short background thread (for the web app's own routes, which should not wait for the network).
+    RECTIFI_NO_ALERT_BACKGROUND=1 turns this and the 60-second ticker off (the test suite sets it)."""
+    if os.getenv("RECTIFI_NO_ALERT_BACKGROUND"):
+        return None
+    thread = threading.Thread(target=sweep_and_deliver, args=(origin,), name=f"alerts-{origin}", daemon=True)
+    thread.start()
+    return thread
+
+
+# ───────────────────────── the tick ─────────────────────────
+
+def _release_held(prefs: dict, now: datetime, client=None) -> int:
+    """After quiet hours: ONE push for everything held ('While you were asleep: 3 alerts'). Returns how many alerts it covered."""
+    if _still_snoozed(prefs["snooze_until"]) or in_quiet_hours(now.replace(tzinfo=None), prefs):
+        return 0
+    with connect() as conn:
+        if not prefs["push_on"]:
+            conn.execute("UPDATE alerts SET push_state = 'skipped' WHERE push_state = 'held'")
+            return 0
+        held = conn.execute("SELECT id, severity, push_title, push_body, scope_key FROM alerts WHERE push_state = 'held' ORDER BY id "
+                            "FOR UPDATE SKIP LOCKED").fetchall()
+        if not held:
+            return 0
+        conn.execute("UPDATE alerts SET push_state = 'sending', push_attempts = push_attempts + 1 WHERE id = ANY(%s)", ([h["id"] for h in held],))
+    if len(held) == 1:
+        one = held[0]
+        title, body = _texts(one["push_title"], one["push_body"], prefs)
+        url, tag = f"/alerts#{one['id']}", one["scope_key"]
+    else:
+        top = sorted(held, key=lambda h: _RANK[h["severity"]])[0]
+        title, body = _texts(f"While you were asleep: {len(held)} alerts", top["push_title"], prefs)
+        if prefs["private_notifications"]:
+            body = f"{len(held)} new spending alerts"
+        url, tag = "/alerts", "held"
+    try:
+        result = _push_all(title, body, url, tag, client=client)
+    except Exception as exc:                                   # noqa: BLE001
+        log.error("push failed (%s)", type(exc).__name__)
+        result = {"devices": 1, "ok": 0, "gone": 0, "retry": 1}
+    ids = [h["id"] for h in held]
+    with connect() as conn:
+        if result["ok"]:
+            conn.execute("UPDATE alerts SET push_state = 'sent', pushed_at = %s WHERE id = ANY(%s)", (now, ids))
+        elif result["retry"]:
+            conn.execute("UPDATE alerts SET push_state = 'failed', next_try_at = %s WHERE id = ANY(%s)", (now + timedelta(minutes=RETRY_BACKOFF_MINUTES[0]), ids))
+        else:
+            conn.execute("UPDATE alerts SET push_state = 'skipped' WHERE id = ANY(%s)", (ids,))
+    return len(held)
+
+
+def _digest(prefs: dict, now: datetime) -> int:
+    """Once a day, after digest_time: today's spending in one alert. Returns 1 when a new digest was written."""
+    if not prefs["digest_on"] or now.time() < time.fromisoformat(prefs["digest_time"]):
+        return 0
+    ctx = build_context()
+    spent = [r for r in ctx.spend if r["txn_date"] == ctx.today]
+    if not spent:
+        return 0
+    total = sum((r["amount"] for r in spent), Decimal(0))
+    safe = safe_to_spend(ctx)
+    numbers: dict[str, Decimal] = {"payment_count": Decimal(len(spent)), "day_total": _whole(total)}
+    tail = ""
+    if safe:
+        if safe["left_today"] >= 0:
+            numbers["safe_left"] = _whole(safe["left_today"])
+            tail = f" {_rs(safe['left_today'])} was left for today."
+        else:
+            numbers["safe_over"] = _whole(-safe["left_today"])
+            tail = f" That is {_rs(-safe['left_today'])} more than the safe amount for today."
+    a = Alert("digest", "info", f"Today you spent {_rs(total)}", f"{len(spent)} payments today, {_rs(total)} in total.{tail}", numbers,
+              f"digest:{ctx.today.isoformat()}", "Today's spending", f"{_rs(total)} across {len(spent)} payments.")
+    with connect() as conn:
+        written = _insert(conn, a, _gate(conn, a, prefs, now), now) is not None
+        if written:
+            conn.execute("INSERT INTO app_settings (key, value) VALUES ('alerts.digest_last', %s::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                         (json.dumps({"date": ctx.today.isoformat()}),))
+    return int(written)
+
+
+def tick(client=None) -> dict:
+    """Run every minute by the web app: sweep, release held alerts, the digest, retries. Safe to call from two processes."""
+    now = _clock()
+    prefs = get_prefs()
+    out = {"sweep": sweep("tick"), "released": 0, "digest": 0, "retried": 0}
+    out["digest"] = _digest(prefs, now)
+    with connect() as conn:
+        got = conn.execute("SELECT pg_try_advisory_xact_lock(%s) AS ok", (TICK_LOCK_ID,)).fetchone()["ok"]
+        if not got:
+            return out
+        out["retried"] = conn.execute("UPDATE alerts SET push_state = 'pending' WHERE push_state = 'failed' AND push_attempts < %s "
+                                      "AND next_try_at IS NOT NULL AND next_try_at <= %s", (RETRY_MAX, now)).rowcount
+    out["released"] = _release_held(prefs, now, client)
+    deliver(client)
+    return out
+
+
+# ───────────────────────── the inbox ─────────────────────────
+
+ALERT_COLUMNS = ("id, kind, severity, title, detail, numbers, rule_id, txn_id, scope_key, created_at, read_at, push_state")
+
+
+def _alert_row(row: dict) -> dict:
+    row["numbers"] = _numbers_back(row["numbers"])
+    return row
+
+
+def list_alerts(status: str = "unread", limit: int = 100) -> list[dict]:
+    if status not in ("unread", "all"):
+        raise RectifiError("status must be 'unread' or 'all'.")
+    where = "WHERE read_at IS NULL" if status == "unread" else ""
+    with connect() as conn:
+        rows = conn.execute(f"SELECT {ALERT_COLUMNS} FROM alerts {where} ORDER BY created_at DESC, id DESC LIMIT %s", (max(1, min(limit, 500)),)).fetchall()
+    return [_alert_row(r) for r in rows]
+
+
+def get_alert(alert_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute(f"SELECT {ALERT_COLUMNS} FROM alerts WHERE id = %s", (alert_id,)).fetchone()
+    if row is None:
+        raise RectifiError("No such alert.")
+    return _alert_row(row)
+
+
+def unread_count() -> int:
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) AS n FROM alerts WHERE read_at IS NULL").fetchone()["n"]
+
+
+def mark_read(alert_id: int) -> dict:
+    with connect() as conn:
+        conn.execute("UPDATE alerts SET read_at = COALESCE(read_at, %s) WHERE id = %s", (_clock(), alert_id))
+    return get_alert(alert_id)
+
+
+def read_all() -> int:
+    with connect() as conn:
+        return conn.execute("UPDATE alerts SET read_at = %s WHERE read_at IS NULL", (_clock(),)).rowcount
+
+
+def mute_alert(alert_id: int) -> dict:
+    """Stop this kind of alert. An alert from a cap rule mutes that rule. Any other (a budget, a streak) mutes its scope."""
+    row = get_alert(alert_id)
+    if row["rule_id"] is not None:
+        update_rule(row["rule_id"], muted=True)
+        return {"muted": "rule", "rule_id": row["rule_id"]}
+    prefs = get_prefs()
+    if row["scope_key"]:
+        prefs["muted_scopes"] = sorted(set(prefs["muted_scopes"]) | {row["scope_key"]})
+    else:
+        prefs["muted_kinds"] = sorted(set(prefs["muted_kinds"]) | {row["kind"]})
+    _write_prefs(prefs)
+    return {"muted": "scope" if row["scope_key"] else "kind"}
+
+
+def snooze_alert(alert_id: int, hours: int) -> dict:
+    if hours not in (1, 24, 168):
+        raise RectifiError("Snooze for 1 hour, 1 day or 1 week.")
+    row = get_alert(alert_id)
+    until = _clock() + timedelta(hours=hours)
+    if row["rule_id"] is not None:
+        update_rule(row["rule_id"], snoozed_until=until)
+        return {"snoozed": "rule", "until": until}
+    if not row["scope_key"]:
+        raise RectifiError("This kind of alert can't be snoozed. You can mute it instead.")
+    prefs = get_prefs()
+    prefs["snoozed_scopes"] = {**prefs["snoozed_scopes"], row["scope_key"]: until.isoformat()}
+    _write_prefs(prefs)
+    return {"snoozed": "scope", "until": until}
+
+
+def as_insight(row: dict) -> insights.Insight:
+    """An alert as an Insight, so the optional 'Explain this' (agent/explain.py) can check its reply against the alert's own numbers."""
+    return insights.Insight(row["kind"], row["severity"], row["title"], row["detail"], row["numbers"], key=f"alert:{row['id']}")
+
+
+# ───────────────────────── phones ─────────────────────────
+
+def add_subscription(endpoint: str, p256dh: str, auth: str, label: str | None = None) -> dict:
+    if not webpush.allowed_endpoint(endpoint):
+        raise RectifiError("That address is not a push service Rectifi can use.")
+    for name, value in (("p256dh", p256dh), ("auth", auth)):
+        try:
+            raw = webpush.b64u_decode(value)
+        except Exception as exc:
+            raise RectifiError(f"The subscription's {name} key is not valid.") from exc
+        if len(raw) != (65 if name == "p256dh" else 16):
+            raise RectifiError(f"The subscription's {name} key is not valid.")
+    label = (label or "").strip()[:60] or None
+    with connect() as conn:
+        row = conn.execute(
+            "INSERT INTO push_subscriptions (endpoint, p256dh, auth, label) VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, label = COALESCE(EXCLUDED.label, push_subscriptions.label), fail_count = 0 "
+            "RETURNING id", (endpoint, p256dh, auth, label)).fetchone()
+    return get_subscription(row["id"])
+
+
+def _public_sub(row: dict) -> dict:
+    from urllib.parse import urlsplit
+
+    return {"id": row["id"], "label": row["label"], "service": urlsplit(row["endpoint"]).hostname, "created_at": row["created_at"], "last_ok_at": row["last_ok_at"]}
+
+
+def get_subscription(sub_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute("SELECT id, endpoint, label, created_at, last_ok_at FROM push_subscriptions WHERE id = %s", (sub_id,)).fetchone()
+    if row is None:
+        raise RectifiError("No such phone.")
+    return _public_sub(row)
+
+
+def list_subscriptions() -> list[dict]:
+    """Only id, label, the push service's host, when added and when it last worked. The endpoint is a secret and never leaves."""
+    with connect() as conn:
+        return [_public_sub(r) for r in conn.execute("SELECT id, endpoint, label, created_at, last_ok_at FROM push_subscriptions ORDER BY id").fetchall()]
+
+
+def delete_subscription(sub_id: int) -> bool:
+    with connect() as conn:
+        return conn.execute("DELETE FROM push_subscriptions WHERE id = %s", (sub_id,)).rowcount > 0
+
+
+def send_test(client=None) -> dict:
+    """'Send test': a harmless notification to every saved phone, so you can see it works. Not an alert; nothing is stored."""
+    return _push_all("Rectifi test", "Phone alerts are working.", "/alerts", "test", client=client)

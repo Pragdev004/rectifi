@@ -97,10 +97,14 @@ def _hit(haystack: str, pattern: str) -> bool:
     return pattern in haystack
 
 
-def user_patterns() -> list[tuple[str, str, str]]:
+def user_patterns(conn=None) -> list[tuple[str, str, str]]:
     """(pattern, merchant, group) rows the person taught, newest first, so a newer teaching overrides an older one."""
-    with connect() as conn:
-        rows = conn.execute("SELECT pattern, merchant, grp FROM merchant_patterns ORDER BY id DESC").fetchall()
+    sql = "SELECT pattern, merchant, grp FROM merchant_patterns ORDER BY id DESC"
+    if conn is not None:
+        rows = conn.execute(sql).fetchall()
+    else:
+        with connect() as own:
+            rows = own.execute(sql).fetchall()
     return [(r["pattern"], r["merchant"], r["grp"]) for r in rows]
 
 

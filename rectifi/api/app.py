@@ -7,6 +7,7 @@ Run exactly one worker: the pending uploads, the recent-imports list and the Ask
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -30,6 +31,7 @@ from .security import ApiGuard, BodyLimit, HostGuard, SecurityHeaders, Tailscale
 
 log = logging.getLogger("rectifi.api")
 
+TICK_SECONDS = 60                    # how often the alerts ticker runs
 ROOT = Path(__file__).resolve().parent.parent.parent
 NOT_BUILT = ("The web app isn't built. Run `python scripts/dev.py build-web`, "
              "or use the old app with `python scripts/dev.py up --streamlit`.")
@@ -88,19 +90,58 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
             log.exception("Could not resume the unfinished sorting jobs.")
         knowledge.auto_reindex()
 
+    async def sw(request: Request) -> Response:
+        """The push-only service worker. Its own route so it is always text/javascript (a Windows registry can say .js is text/plain)
+        and never cached, so an update reaches the phone at once. Public, like every static file."""
+        path = root / "sw.js"
+        if not path.is_file():
+            return PlainTextResponse("Not found", status_code=404)
+        return FileResponse(path, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+
+    async def alert_ticker() -> None:
+        """Every minute: catch payments that arrived without a hook, release alerts held overnight, the digest, retries."""
+        from .. import alerts
+
+        while True:
+            await asyncio.sleep(TICK_SECONDS)
+            try:
+                await run_in_threadpool(alerts.tick)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:                                # noqa: BLE001  (log the type only; the loop must go on)
+                log.error("alerts tick failed (%s)", type(exc).__name__)
+
     @asynccontextmanager
     async def lifespan(app):
         config.enforce_langsmith_privacy()          # traces never leave the laptop unless RECTIFI_LANGSMITH=1
+        ticker = None
         try:
             await run_in_threadpool(init_db)
         except DB_ERRORS:
             log.warning("The database is not reachable yet. /api answers 503 until it is, then recovers on its own.")
         else:
             await run_in_threadpool(_start_background_work)
-        yield
+            if not os.getenv("RECTIFI_NO_ALERT_BACKGROUND"):
+                from .. import alerts
+
+                try:
+                    await run_in_threadpool(alerts.ensure_watermark)       # what is already here is history, not news
+                except DB_ERRORS:
+                    pass
+                ticker = asyncio.create_task(alert_ticker())
+        try:
+            yield
+        finally:
+            if ticker is not None:
+                ticker.cancel()
+                try:
+                    await ticker
+                except asyncio.CancelledError:
+                    pass
 
     routes = [
         Mount("/api", routes=api_routes()),
+        Route("/sw.js", sw, methods=["GET", "HEAD"]),
         Mount("/assets", app=ImmutableFiles(directory=root / "assets", check_dir=False)),
         Route("/{path:path}", spa, methods=["GET", "HEAD"]),
     ]

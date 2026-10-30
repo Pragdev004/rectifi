@@ -12,7 +12,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ... import tools
+from ... import alerts, tools
 from ...importer import ROLES, assess_statement, import_rows, normalise, preview_totals, read_table
 from .. import uploads, wire
 from ..errors import ApiError
@@ -149,6 +149,7 @@ def finish_import(rows, account_id: int, filename: str, digest: str, how: str, p
     if result.batch_id is None:
         raise ApiError(422, "invalid", NOTHING_IMPORTED)
     start_sorting(result.batch_id)
+    alerts.kick("import")                       # one summary alert for the whole batch (never one per row)
     skipped = list(problems[:PREVIEW_PROBLEMS])
     created = tools.get_import_batch(result.batch_id)["created_at"]       # tells this batch from a later one that reuses the id
     uploads.recent.put(digest, {"batch_id": result.batch_id, "created_at": created, "how": how,
