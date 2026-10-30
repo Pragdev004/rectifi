@@ -1516,7 +1516,176 @@ def delete_chart(chart_id: int) -> bool:
 # ═══ WS-CHARTS: end ═══
 
 # ═══ WS-CHAT: begin ═══
-# conversations table helpers: list/create/rename/delete threads, search_text, memory page reads.
+# Conversations (one row per chat thread), local trace queries, and the learned category rules shown on the Memory page.
+# The chat messages themselves live in LangGraph's checkpoint tables (agent/checkpoint.py); this block only keeps the list.
+import uuid as _uuid
+
+from .privacy import mask_sensitive as _mask
+
+CONV_TITLE_DEFAULT = "New conversation"
+CONV_TITLE_MAX = 80
+CONV_SEARCH_MAX = 20_000
+_CONV_COLS = "thread_id, title, preview, created_at, updated_at"
+
+
+def _clean_title(title: str | None) -> str:
+    text = re.sub(r"\s+", " ", title or "").strip()
+    if not text:
+        raise RectifiError("A conversation needs a name.")
+    return text[:CONV_TITLE_MAX]
+
+
+def conversation_create(thread_id: str | None = None, title: str | None = None) -> dict:
+    """Make the list row for a thread. Calling it again for the same thread changes nothing."""
+    tid = thread_id or str(_uuid.uuid4())
+    name = _clean_title(title) if title else CONV_TITLE_DEFAULT
+    with connect() as conn:
+        conn.execute("INSERT INTO conversations (thread_id, title) VALUES (%s, %s) ON CONFLICT (thread_id) DO NOTHING", (tid, name))
+        return conn.execute(f"SELECT {_CONV_COLS} FROM conversations WHERE thread_id = %s", (tid,)).fetchone()
+
+
+def conversation_get(thread_id: str) -> dict | None:
+    with connect() as conn:
+        return conn.execute(f"SELECT {_CONV_COLS} FROM conversations WHERE thread_id = %s", (thread_id,)).fetchone()
+
+
+def conversation_list(q: str | None = None, limit: int = 100) -> list[dict]:
+    """Newest first. `q` matches the title or the (masked) text of the conversation, ignoring case."""
+    limit = max(1, min(int(limit), 500))
+    with connect() as conn:
+        if q and q.strip():
+            like = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            return conn.execute(
+                f"SELECT {_CONV_COLS} FROM conversations WHERE title ILIKE %s OR search_text ILIKE %s ORDER BY updated_at DESC LIMIT %s",
+                (like, like, limit)).fetchall()
+        return conn.execute(f"SELECT {_CONV_COLS} FROM conversations ORDER BY updated_at DESC LIMIT %s", (limit,)).fetchall()
+
+
+def conversation_rename(thread_id: str, title: str) -> dict:
+    name = _clean_title(title)
+    with connect() as conn:
+        row = conn.execute(f"UPDATE conversations SET title = %s WHERE thread_id = %s RETURNING {_CONV_COLS}", (name, thread_id)).fetchone()
+    if row is None:
+        raise RectifiError("There is no conversation with that id.")
+    return row
+
+
+def conversation_delete(thread_id: str) -> bool:
+    """Remove the list row and this thread's trace spans. The caller removes the checkpoints (that needs LangGraph)."""
+    with connect() as conn:
+        conn.execute("DELETE FROM trace_spans WHERE thread_id = %s", (thread_id,))
+        return conn.execute("DELETE FROM conversations WHERE thread_id = %s", (thread_id,)).rowcount > 0
+
+
+def conversation_touch(thread_id: str, *, user_text: str | None = None, assistant_text: str | None = None) -> dict:
+    """After a turn: make sure the row exists, name it from the first question, set the preview, append the masked text
+    to the search column (the newest 20 KB are kept) and bump updated_at."""
+    mu = _mask(re.sub(r"\s+", " ", user_text or "").strip())
+    ma = _mask(re.sub(r"\s+", " ", assistant_text or "").strip())
+    with connect() as conn:
+        conn.execute("INSERT INTO conversations (thread_id) VALUES (%s) ON CONFLICT (thread_id) DO NOTHING", (thread_id,))
+        row = conn.execute("SELECT title, search_text FROM conversations WHERE thread_id = %s FOR UPDATE", (thread_id,)).fetchone()
+        title = row["title"]
+        if mu and title == CONV_TITLE_DEFAULT:
+            title = mu[:48].rstrip() + ("…" if len(mu) > 48 else "")
+        search = (row["search_text"] + " " + mu + " " + ma).strip()[-CONV_SEARCH_MAX:]
+        preview = (ma or mu)[:120] or None
+        return conn.execute(
+            f"UPDATE conversations SET title = %s, search_text = %s, preview = COALESCE(%s, preview), updated_at = now() "
+            f"WHERE thread_id = %s RETURNING {_CONV_COLS}", (title, search, preview, thread_id)).fetchone()
+
+
+# ── traces (written by agent/tracing.py, read by the Traces page) ──
+
+_ROUTE_SPANS = {"knowledge": "knowledge", "chart": "chart", "smalltalk": "chat", "remember": "memory", "agent": "agent"}
+
+
+def trace_runs(limit: int = 50, status: str | None = None, entry: str | None = None) -> list[dict]:
+    """The newest runs (a run is a root span). Latency is wall time from the first span start to the last end."""
+    limit = max(1, min(int(limit), 200))
+    with connect() as conn:
+        roots = conn.execute(
+            """SELECT r.run_id AS root_run_id, r.name AS entry, r.thread_id, r.started_at,
+                      (SELECT count(*) FROM trace_spans s WHERE s.root_run_id = r.run_id) AS span_count,
+                      (SELECT bool_or(s.status = 'error') FROM trace_spans s WHERE s.root_run_id = r.run_id) AS has_error,
+                      (SELECT max(s.ended_at) FROM trace_spans s WHERE s.root_run_id = r.run_id) AS ended_at,
+                      (SELECT string_agg(DISTINCT s.model, ', ') FROM trace_spans s WHERE s.root_run_id = r.run_id AND s.model IS NOT NULL) AS model,
+                      (SELECT COALESCE(sum(s.input_tokens), 0) + COALESCE(sum(s.output_tokens), 0) FROM trace_spans s WHERE s.root_run_id = r.run_id) AS tokens,
+                      (SELECT array_agg(DISTINCT s.name) FROM trace_spans s WHERE s.root_run_id = r.run_id AND s.name = ANY(%s)) AS route_nodes,
+                      r.status AS root_status, r.input_preview
+               FROM trace_spans r WHERE r.run_id = r.root_run_id ORDER BY r.started_at DESC LIMIT %s""",
+            (list(_ROUTE_SPANS), limit * 4 if (status or entry) else limit)).fetchall()
+    runs = []
+    for r in roots:
+        names = set(r["route_nodes"] or [])
+        route = next((label for key, label in _ROUTE_SPANS.items() if key in names and key != "agent"), "agent" if "agent" in names else None)
+        failed = bool(r["has_error"]) or r["root_status"] == "error"
+        label = "chat" if r["entry"] in ("chat", "ask") else r["entry"]
+        run = {"root_run_id": str(r["root_run_id"]), "entry": label, "route": route, "thread_id": r["thread_id"],
+               "started_at": r["started_at"], "latency_ms": _ms(r["started_at"], r["ended_at"]), "status": "error" if failed else
+               ("running" if r["root_status"] == "running" else "ok"), "span_count": r["span_count"], "model": r["model"],
+               "tokens": int(r["tokens"] or 0), "preview": r["input_preview"]}
+        if (status and run["status"] != status) or (entry and run["entry"] != entry):
+            continue
+        runs.append(run)
+    return runs[:limit]
+
+
+def _ms(start, end) -> int | None:
+    return int((end - start).total_seconds() * 1000) if start and end else None
+
+
+def trace_tree(root_run_id: str) -> dict | None:
+    """One run with its spans in tree order (each span knows its depth)."""
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM trace_spans WHERE root_run_id = %s ORDER BY started_at, id", (root_run_id,)).fetchall()
+    if not rows:
+        return None
+    children: dict = {}
+    for r in rows:
+        children.setdefault(r["parent_run_id"], []).append(r)
+    known = {r["run_id"] for r in rows}
+    ordered: list[dict] = []
+
+    def walk(parent, depth):
+        for r in children.get(parent, []):
+            ordered.append({"run_id": str(r["run_id"]), "parent_run_id": str(r["parent_run_id"]) if r["parent_run_id"] else None,
+                            "depth": depth, "name": r["name"], "run_type": r["run_type"], "model": r["model"], "status": r["status"],
+                            "started_at": r["started_at"], "ms": _ms(r["started_at"], r["ended_at"]),
+                            "input_tokens": r["input_tokens"], "output_tokens": r["output_tokens"],
+                            "input_preview": r["input_preview"], "output_preview": r["output_preview"], "error": r["error"]})
+            walk(r["run_id"], depth + 1)
+
+    walk(None, 0)
+    for orphan in [r for r in rows if r["parent_run_id"] is not None and r["parent_run_id"] not in known]:   # parent span never ended
+        ordered.append({"run_id": str(orphan["run_id"]), "parent_run_id": str(orphan["parent_run_id"]), "depth": 1, "name": orphan["name"],
+                        "run_type": orphan["run_type"], "model": orphan["model"], "status": orphan["status"], "started_at": orphan["started_at"],
+                        "ms": _ms(orphan["started_at"], orphan["ended_at"]), "input_tokens": orphan["input_tokens"],
+                        "output_tokens": orphan["output_tokens"], "input_preview": orphan["input_preview"],
+                        "output_preview": orphan["output_preview"], "error": orphan["error"]})
+    root = next((r for r in rows if r["run_id"] == r["root_run_id"]), rows[0])
+    summary = next((x for x in trace_runs(200) if x["root_run_id"] == str(root["root_run_id"])), None)
+    return {"run": summary or {"root_run_id": str(root["root_run_id"]), "entry": root["name"], "status": root["status"]}, "spans": ordered}
+
+
+def trace_clear() -> int:
+    with connect() as conn:
+        return conn.execute("DELETE FROM trace_spans").rowcount
+
+
+# ── category rules the person taught (shown on the Memory page) ──
+
+def memory_learned_rules() -> list[dict]:
+    with connect() as conn:
+        return conn.execute(
+            """SELECT r.id, r.pattern, c.name AS category, r.created_at FROM merchant_rules r JOIN categories c ON c.id = r.category_id
+               WHERE r.source = 'learned' ORDER BY r.created_at DESC, r.id DESC""").fetchall()
+
+
+def memory_remove_learned_rule(rule_id: int) -> bool:
+    """Forget one rule you taught. Rules that ship with Rectifi cannot be removed here."""
+    with connect() as conn:
+        return conn.execute("DELETE FROM merchant_rules WHERE id = %s AND source = 'learned'", (rule_id,)).rowcount > 0
 # ═══ WS-CHAT: end ═══
 
 # ═══ WS-RAG: begin ═══

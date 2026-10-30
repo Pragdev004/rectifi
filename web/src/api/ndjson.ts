@@ -1,8 +1,10 @@
 import { REQUEST_HEADER, ApiError, NetworkError } from "./client";
 import type { AskEvent } from "./types";
 
+export type EventHandler<E> = (event: E) => void;
+
 /** POST JSON and read the reply one line at a time. Each line is one JSON event. */
-export async function streamAsk(path: string, body: unknown, onEvent: (event: AskEvent) => void, signal?: AbortSignal): Promise<void> {
+export async function streamNdjson<E>(path: string, body: unknown, onEvent: EventHandler<E>, signal?: AbortSignal): Promise<void> {
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {
@@ -36,7 +38,7 @@ export async function streamAsk(path: string, body: unknown, onEvent: (event: As
     const text = line.trim();
     if (!text) return;
     try {
-      onEvent(JSON.parse(text) as AskEvent);
+      onEvent(JSON.parse(text) as E);
     } catch {
       /* a half line is ignored; the next chunk completes the next one */
     }
@@ -54,3 +56,7 @@ export async function streamAsk(path: string, body: unknown, onEvent: (event: As
   }
   flush(buffer + decoder.decode());
 }
+
+/** The original Ask page's stream (kept for the /ask/* alias). */
+export const streamAsk = (path: string, body: unknown, onEvent: EventHandler<AskEvent>, signal?: AbortSignal) =>
+  streamNdjson<AskEvent>(path, body, onEvent, signal);
