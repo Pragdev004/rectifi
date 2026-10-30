@@ -26,8 +26,8 @@
 .payee { min-width: 160px; padding-top: 12px !important; }
 .payee strong { font-weight: 600; overflow-wrap: anywhere; }
 .payee small { display: block; font-size: var(--t-sm); line-height: var(--t-sm-lh); color: var(--c-muted); overflow-wrap: anywhere; }
-.cat { width: 168px; }
-.acct { width: 176px; }
+.cat { width: 156px; }
+.acct { width: 150px; }
 .amountCell {
   width: 124px;
   text-align: right;
@@ -37,10 +37,10 @@
   border-left: 3px double var(--c-rule-strong);
   white-space: nowrap;
 }
-.sorted { width: 96px; padding-top: 16px !important; }
+.sorted { width: 100px; padding-top: 16px !important; }
 .sorted > span { font-size: 0.625rem; }
-.src { width: 64px; padding-top: 16px !important; font-size: var(--t-sm); color: var(--c-muted); }
-.noteCell { width: 140px; }
+.via { display: block; margin-top: 4px; font-size: 0.6875rem; line-height: 1rem; color: var(--c-muted); }
+.noteCell { width: 130px; }
 .actions { width: 52px; padding-right: 0 !important; }
 .table .in { display: inline-block; margin-left: 6px; font-family: var(--font-body); font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.08em; color: var(--c-ok); vertical-align: 2px; }
 .status { position: absolute; left: 0; bottom: 0; font-size: 0.6875rem; line-height: 14px; color: var(--c-muted); }
@@ -50,7 +50,7 @@
 .unlinked { color: var(--c-near); }
 
 /* filter bar */
-.filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-3); align-items: end; margin-bottom: var(--s-4); }
+.filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.4fr); gap: var(--s-3); align-items: end; margin-bottom: var(--s-4); }
 .phoneBar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s-2); align-items: end; margin-bottom: var(--s-3); }
 .filterStack { display: grid; gap: var(--s-4); }
 .countLine { margin: var(--s-3) 0 var(--s-2); color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); }

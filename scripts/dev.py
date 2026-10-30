@@ -672,47 +672,8 @@ def cmd_doctor(_args) -> None:
         r.warn(f"Test database not reachable at {safe_target(test_url)} (only the tests need it)",
                "Run `python scripts/dev.py db`, or run db/init.sql once on your own Postgres (README, 'Path B').")
 
-    provider = setting("LLM_PROVIDER", "ollama").lower()
-    if provider == "deepseek":
-        if setting("DEEPSEEK_API_KEY"):
-            r.ok("LLM: deepseek, API key is set")
-        else:
-            r.warn("LLM: deepseek, but DEEPSEEK_API_KEY is empty (the Ask page will be off)", "Put your key in .env, or set LLM_PROVIDER=ollama.")
-    elif provider == "ollama":
-        base = setting("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-        model = setting("OLLAMA_MODEL", "qwen2.5:7b")
-        try:
-            with urllib.request.urlopen(base + "/api/tags", timeout=1.5) as reply:
-                names = [m.get("name", "") for m in json.load(reply).get("models", [])]
-            if model in names or (":" not in model and model in {n.split(":")[0] for n in names}):
-                r.ok(f"LLM: ollama, model {model} is ready")
-            else:
-                r.warn(f"LLM: ollama is running but {model} is not downloaded (the Ask page will be off)", f"Run `ollama pull {model}`.")
-        except (urllib.error.URLError, OSError, ValueError):
-            r.warn(f"LLM: ollama is not running at {base} (the Ask page will be off; the rest of Rectifi works)",
-                   "Open the Ollama app, or set LLM_PROVIDER=openrouter or deepseek in .env.")
-    elif provider in ("openrouter", "huggingface", "openai_compat"):
-        names = {"openrouter": ("OPENROUTER_API_KEY", "OPENROUTER_MODEL", ""),
-                 "huggingface": ("HF_TOKEN", "HF_MODEL", "deepseek-ai/DeepSeek-V3.1:cheapest"),
-                 "openai_compat": ("OPENAI_COMPAT_API_KEY", "OPENAI_COMPAT_MODEL", "")}[provider]
-        key_name, model_name, model_default = names
-        model = setting(model_name, model_default)
-        missing = [n for n, v in ((key_name, setting(key_name)), (model_name, model)) if not v]
-        if provider == "openai_compat" and not setting("OPENAI_COMPAT_BASE_URL"):
-            missing.append("OPENAI_COMPAT_BASE_URL")
-        if missing:
-            fix = "Put " + ", ".join(missing) + " in .env."
-            if provider == "openrouter":
-                fix += " `python scripts/dev.py free-models` lists models you can use."
-            r.warn(f"LLM: {provider}, but {', '.join(missing)} is empty (the Ask page will be off)", fix)
-        else:
-            r.ok(f"LLM: {provider}, model {model}, key is set (not tested: that needs the internet)")
-        if provider == "huggingface":
-            r.warn("LLM: Hugging Face is not free on a free account ($0 credit)",
-                   "You need PRO or purchased credits, or the Ask page fails with HTTP 402. Ollama or OpenRouter :free cost nothing.")
-    else:
-        r.warn(f"LLM_PROVIDER={provider!r} is not known (the Ask page will be off)",
-               "Use ollama, deepseek, openrouter, huggingface or openai_compat in .env.")
+    for level, what, fix in load_devtool("models").doctor_checks(setting, quick=getattr(_args, "quick", False)):
+        {"ok": lambda w, f: r.ok(w), "warn": r.warn, "fail": r.fail}[level](what, fix)
 
     if gateway_enabled() and gateway_is_open():
         r.warn(f"Phone gateway listens on {gateway_host()}, which is open to everyone on your network (only the device token protects it)",
@@ -789,6 +750,19 @@ def devtool_commands() -> dict[str, tuple]:
 # ───────────────────────── entry point ─────────────────────────
 
 def main() -> None:
+    # One mechanism for the devtools commands (scripts/devtools/*): hand the raw arguments straight to the command,
+    # so options such as `ollama-setup --dry-run` or `set-password --print` are not parsed (or refused) by argparse.
+    # They are still listed below, so `dev.py --help` shows them.
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        tools = devtool_commands()
+        if sys.argv[1] in tools:
+            _module, fn, _help = tools[sys.argv[1]]
+            try:
+                fn(sys.argv[2:])
+            except KeyboardInterrupt:
+                say("\nStopped.")
+                sys.exit(130)
+            return
     parser = argparse.ArgumentParser(prog="dev.py", description="Rectifi helper commands.")
     sub = parser.add_subparsers(dest="command", required=True)
     for name, fn, help_text in [
@@ -807,6 +781,8 @@ def main() -> None:
         ("mcp-config", cmd_mcp_config, "print the Claude Desktop config"),
     ]:
         p = sub.add_parser(name, help=help_text)
+        if name == "doctor":
+            p.add_argument("--quick", action="store_true", help="skip the model round trip (no network calls for the model)")
         if name in ("app", "up", "demo"):
             p.add_argument("--streamlit", action="store_true", help="run the old Streamlit app instead of the web app")
         p.set_defaults(func=fn)

@@ -13,6 +13,8 @@ DEV = ROOT / "scripts" / "dev.py"
 
 def dev(*args, env=None):
     full_env = {**os.environ, **(env or {})}
+    if args and args[0] == "doctor" and "--quick" not in args:
+        args = (*args, "--quick")          # no model round trip in tests
     return subprocess.run([sys.executable, str(DEV), *args], cwd=ROOT, env=full_env, capture_output=True, text=True, timeout=60)
 
 

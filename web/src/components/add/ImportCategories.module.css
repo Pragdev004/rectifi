@@ -19,7 +19,7 @@
 .date { grid-area: date; font-family: var(--font-figures); font-size: var(--t-sm); color: var(--c-muted); }
 .payee { grid-area: payee; min-width: 0; }
 .payee strong { font-weight: 600; overflow-wrap: anywhere; }
-.payee small { display: block; font-size: var(--t-sm); line-height: var(--t-sm-lh); color: var(--c-muted); overflow-wrap: anywhere; }
+.payee small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: var(--t-sm); line-height: var(--t-sm-lh); color: var(--c-muted); overflow-wrap: anywhere; }
 .amount { grid-area: amount; text-align: right; }
 .cat { grid-area: cat; min-width: 0; }
 .source { grid-area: source; justify-self: end; }
@@ -35,8 +35,10 @@
 .link:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
 @media (min-width: 900px) {
   .row {
-    grid-template-columns: 5.5rem minmax(10rem, 1fr) 8rem 11rem 6.5rem;
-    grid-template-areas: "date payee amount cat source" "under under under under under";
+    grid-template-columns: 4rem minmax(12rem, 1fr) 6.5rem 10.5rem;
+    grid-template-areas: "date payee amount cat" "source under under under";
+    align-items: start;
   }
+  .cat, .amount { align-self: center; }
   .source { justify-self: start; }
 }

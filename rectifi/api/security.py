@@ -255,6 +255,8 @@ class SessionLock:
 
     async def __call__(self, scope, receive, send):
         path = scope["path"] if scope["type"] == "http" else ""
+        if scope["type"] == "http":
+            scope.setdefault("state", {})["uid"] = "owner"      # whose memory: one signed-in owner (read as request.state.uid)
         if (scope["type"] != "http" or not _is_api(path) or path in SESSION_EXEMPT or scope["method"] == "OPTIONS"
                 or not _auth.login_required()):
             return await self.app(scope, receive, send)

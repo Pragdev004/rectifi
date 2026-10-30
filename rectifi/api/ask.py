@@ -22,6 +22,7 @@ from starlette.responses import StreamingResponse
 
 from .. import config
 from .errors import ApiError
+from . import wire
 from .wire import to_wire
 
 TICK_SECONDS = 5.0
@@ -274,12 +275,17 @@ def chat_config(thread_id: str, turn: Turn, checkpoint_id: str | None = None) ->
     return {**base, "callbacks": [*base["callbacks"], StopHandler(turn.cancelled)], "configurable": configurable, "recursion_limit": 40}
 
 
+def interrupt_kind(value: dict) -> str:
+    """The word the chat window switches on. Our own pauses say `kind`; the RAG graph's web-search question says type="web_search"."""
+    return str(value.get("kind") or {"web_search": "web_consent"}.get(value.get("type"), "confirm"))
+
+
 def _interrupts(snapshot) -> list[dict]:
     found = []
     for task in getattr(snapshot, "tasks", ()) or ():
         for item in getattr(task, "interrupts", ()) or ():
             value = item.value if isinstance(item.value, dict) else {"value": item.value}
-            found.append({"id": getattr(item, "id", None), "kind": value.get("kind", "confirm"), "payload": value})
+            found.append({"id": getattr(item, "id", None), "kind": interrupt_kind(value), "payload": value})
     return found
 
 
@@ -305,9 +311,9 @@ def chat_transcript(messages: list) -> list[dict]:
         elif isinstance(m, AIMessage) and m.content:
             odd = kw["unverified"] if "unverified" in kw else [money(v) for v in unverified_amounts(seen)]
             items.append({"id": m.id, "role": "assistant", "text": _text_of(m.content), "ts": kw.get("ts"), "route": kw.get("route"),
-                          "unverified": odd, "steps": steps, "citations": kw.get("citations") or [], "trace": kw.get("trace") or [],
+                          "unverified": odd, "steps": steps, "citations": [wire.citation(x) for x in kw.get("citations") or []], "trace": kw.get("trace") or [],
                           "checks": kw.get("turn_trace") or [], "artifact": kw.get("artifact"), "support": kw.get("support"),
-                          "useful": kw.get("useful"), "stopped": bool(kw.get("stopped"))})
+                          "useful": kw.get("useful"), "abstained": bool(kw.get("abstained")), "stopped": bool(kw.get("stopped"))})
             steps = []
     return items
 
@@ -451,7 +457,7 @@ def _translate(ns: tuple, mode: str, data, emit, turn: Turn, seen_interrupts: se
                         continue
                     seen_interrupts.add(key)
                     value = item.value if isinstance(item.value, dict) else {"value": item.value}
-                    emit({"type": "interrupt", "id": getattr(item, "id", None), "kind": value.get("kind", "confirm"), "payload": value})
+                    emit({"type": "interrupt", "id": getattr(item, "id", None), "kind": interrupt_kind(value), "payload": value})
             elif node == "tools" and ns:
                 for message in (payload or {}).get("messages", []):
                     if isinstance(message, ToolMessage):

@@ -26,7 +26,7 @@ from ..db import init_db
 from .errors import DB_ERRORS, EXCEPTION_HANDLERS
 from .routes import (accounts, ask, auth, budgets, charts, chat, classify, imports, insights, knowledge, memory, meta, models,
                      overview, phone, review, traces, transactions)
-from .security import ApiGuard, BodyLimit, HostGuard, SecurityHeaders, TailscaleLock
+from .security import ApiGuard, BodyLimit, HostGuard, SecurityHeaders, TailscaleLock, install_session_lock
 
 log = logging.getLogger("rectifi.api")
 
@@ -78,6 +78,16 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
                 return PlainTextResponse("Not found", status_code=404)
         return FileResponse(index, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
+    def _start_background_work() -> None:
+        """Only when the database is up: finish sorting jobs a restart cut short, and refresh the library index (a thread; one worker)."""
+        try:
+            from ..agent import jobs                            # lazy: rectifi.api must import without langchain
+
+            jobs.requeue_unfinished()
+        except Exception:                                       # noqa: BLE001
+            log.exception("Could not resume the unfinished sorting jobs.")
+        knowledge.auto_reindex()
+
     @asynccontextmanager
     async def lifespan(app):
         config.enforce_langsmith_privacy()          # traces never leave the laptop unless RECTIFI_LANGSMITH=1
@@ -85,6 +95,8 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
             await run_in_threadpool(init_db)
         except DB_ERRORS:
             log.warning("The database is not reachable yet. /api answers 503 until it is, then recovers on its own.")
+        else:
+            await run_in_threadpool(_start_background_work)
         yield
 
     routes = [
@@ -97,5 +109,7 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
     if lock_user:
         middleware.append(Middleware(TailscaleLock, user=lock_user))
     middleware += [Middleware(ApiGuard), Middleware(BodyLimit)]
-    return Starlette(routes=routes, middleware=middleware, exception_handlers=EXCEPTION_HANDLERS, lifespan=lifespan)
+    app = Starlette(routes=routes, middleware=middleware, exception_handlers=EXCEPTION_HANDLERS, lifespan=lifespan)
+    install_session_lock(app)         # raises StartupRefused in public mode without RECTIFI_PASSWORD_HASH + RECTIFI_SESSION_SECRET
+    return app
 

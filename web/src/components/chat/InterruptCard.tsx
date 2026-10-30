@@ -1,6 +1,7 @@
 import type { Interrupt } from "../../api/chat";
 import { Button } from "../forms";
 import { Callout } from "../ui";
+import { WebConsent } from "../rag/WebConsent";
 import c from "./chat.module.css";
 
 /** A question the graph is waiting on. The answer goes back as `value` to POST …/resume. */
@@ -26,14 +27,8 @@ export function InterruptCard({ interrupt, busy, onAnswer }: { interrupt: Interr
     const query = typeof p.query === "string" ? p.query : text;
     return (
       <div className={c.interrupt} data-testid="interrupt-card">
-        <Callout tone="near" lead={`Search the web for “${query}”?`} role="status" actions={
-          <>
-            <Button variant="primary" disabled={busy} onClick={() => onAnswer(true)}>Search</Button>
-            <Button disabled={busy} onClick={() => onAnswer(false)}>Answer without it</Button>
-          </>
-        }>
-          <p className={c.hint}>Your question would leave this laptop. Nothing else is sent.</p>
-        </Callout>
+        <WebConsent request={{ type: "web_search", query, message: typeof p.message === "string" ? p.message : "", choices: ["Search", "Answer without it"] }}
+          busy={busy} onChoose={(allow) => onAnswer(allow)} />
       </div>
     );
   }

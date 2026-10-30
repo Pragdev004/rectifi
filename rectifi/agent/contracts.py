@@ -23,14 +23,16 @@ TraceEvent = TypedDict("TraceEvent", {"step": str, "verdict": str, "detail": str
 
 class RagInput(TypedDict):
     question: str
-    mode: str           # "auto" | "library" | "web" | "off"  (what the person allowed this question to use)
+    mode: str           # "auto" | "rag" | "crag" | "self_rag" | "full" (the answer style). Any other word means auto.
     history: list       # earlier messages, already masked
     uid: str            # "owner", or the Tailscale / login subject
 
 
 class RagOutput(TypedDict):
     answer: str
-    citations: list[dict]      # [{"source": "guides/budgeting.md", "title": str, "chunk": int, "quote": str}]
+    citations: list[dict]      # [{"n": int, "corpus": "guide"|"note"|"txn"|"upload"|"web"|"tool", "label": str, "source": str, "title": str, "chunk": int, "quote": str}]
+    # The graph's result also carries three extra keys the chat uses: route ("retrieve" | "direct" | "tools"), mode (the style
+    # actually used) and abstained (True when it declined or found nothing instead of guessing).
     trace: list[TraceEvent]
     unverified: list[str]      # sentences or ₹ figures the answer could not back with a citation
     support: str | None        # Self-RAG grade: "full" | "partial" | "none" | None when not graded

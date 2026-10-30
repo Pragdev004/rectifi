@@ -40,7 +40,16 @@ export interface Txn {
   category_id: number | null;
   category: string | null;
   category_kind: CategoryKind | null;
+  /** How the category was chosen, and what the classifier thought. All optional: old rows and some endpoints leave them out. */
+  category_source?: CategorySource | null;
+  category_confidence?: number | null;
+  category_reason?: string | null;
+  suggested_category?: string | null;
+  suggested_confidence?: number | null;
 }
+
+/** How a category was chosen. Rows from before the classifier have no source (null). */
+export type CategorySource = "user" | "learned" | "rule" | "heuristic" | "retrieval" | "llm" | "fallback";
 
 export interface CategoryShare {
   category: string;

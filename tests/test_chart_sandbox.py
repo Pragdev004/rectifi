@@ -196,3 +196,29 @@ def test_a_planted_oversized_result_file_is_not_read(tmp_path):
 def test_the_windows_job_object_limits_apply():                       # pragma: no cover - runs only on Windows
     r = run(GOOD)
     assert r.ok and r.limits in ("job-object", "timeout-only")
+
+
+def test_the_sandbox_runs_when_only_tmp_is_writable(tmp_path):
+    """The deploy compose file runs the app with a read-only root file system and a tmpfs /tmp (docs/HOSTING.md). In a private
+    mount namespace HOME is read-only, so the cache folder the sandbox would normally use cannot be made: it must fall back to /tmp."""
+    import json
+    import shutil
+    import subprocess
+
+    from pathlib import Path
+
+    if shutil.which("unshare") is None or os.geteuid() != 0:
+        pytest.skip("needs `unshare` and root to make a read-only mount")
+    root = Path(__file__).resolve().parent.parent
+    ro_home = tmp_path / "ro_home"
+    ro_home.mkdir()
+    py = ("import json, sys; from rectifi.charts import sandbox; "
+          f"r = sandbox.run_chart({GOOD!r}, json.loads({json.dumps(FRAME)!r})); "
+          "print('RESULT', r.ok, sandbox.usable_cache_dir())")
+    shell = (f"set -e; mount --bind {ro_home} {ro_home}; mount -o remount,ro,bind {ro_home}; "
+             f"export HOME={ro_home} RECTIFI_HOME={ro_home}/.rectifi; cd {root}; {sys.executable} -c \"$PY\"")
+    done = subprocess.run(["unshare", "-m", "sh", "-c", shell], capture_output=True, text=True, timeout=120, env={**os.environ, "PY": py})
+    if done.returncode != 0 and "mount" in done.stderr:
+        pytest.skip("this environment does not allow mounts: " + done.stderr.strip()[:120])
+    assert "RESULT True" in done.stdout, done.stdout + done.stderr
+    assert "rectifi-mplcache" in done.stdout, done.stdout                      # fell back to the temp dir

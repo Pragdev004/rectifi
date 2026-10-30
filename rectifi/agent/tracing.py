@@ -31,6 +31,10 @@ def preview(value: Any) -> str | None:
     """A masked, truncated text preview of anything a step received or returned."""
     if value is None:
         return None
+    if isinstance(value, dict) and isinstance(value.get("messages"), list) and value["messages"]:
+        text = getattr(value["messages"][-1], "content", None)     # a graph turn: the list shows what was asked, not the dict
+        if isinstance(text, str) and text.strip():
+            value = text
     if not isinstance(value, str):
         try:
             value = json.dumps(value, default=_describe, ensure_ascii=False)

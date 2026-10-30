@@ -3,7 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { clearTraces, traceKeys, useTraceRuns, useTraceTree, type TraceRun, type TraceSpan } from "../api/traces";
 import { ConfirmDialog, Dialog } from "../components/Dialog";
-import { Button, SegmentedControl } from "../components/forms";
+import { Button, Checkbox, SegmentedControl } from "../components/forms";
 import { Loaded } from "../components/Loaded";
 import { PageHeader } from "../components/PageHeader";
 import { useToast } from "../components/Toast";
@@ -51,14 +51,30 @@ function SpanRow({ span }: { span: TraceSpan }) {
   );
 }
 
+// LangChain's own wiring (sequence, prompt template, "run") says nothing a person can use; the real steps are the named nodes, model calls, tools and retrievers.
+const PLUMBING = new Set(["ChatPromptTemplate", "PromptTemplate", "run", "LangGraph", "StrOutputParser", "PydanticOutputParser", "JsonOutputParser", "ChannelWrite", "ChannelRead"]);
+export function isPlumbing(span: TraceSpan): boolean {
+  return span.run_type === "chain" && span.status === "ok" && (span.name.startsWith("Runnable") || PLUMBING.has(span.name));
+}
+
 function Tree({ id }: { id: string }) {
   const tree = useTraceTree(id);
+  const [internal, setInternal] = useState(false);
   return (
     <Loaded query={tree} skeleton={<div aria-hidden="true"><Skeleton height={40} /><Skeleton height={40} style={{ marginTop: 8 }} /></div>}>
       {(data) => (
         <div className={t.panel}>
-          <Eyebrow>Steps · {data.spans.length}</Eyebrow>
-          <ul className={t.tree} aria-label="Steps of this run">{data.spans.map((s) => <SpanRow key={s.run_id} span={s} />)}</ul>
+          {(() => {
+            const hidden = data.spans.filter(isPlumbing).length;
+            const shown = internal ? data.spans : data.spans.filter((s) => !isPlumbing(s));
+            return (
+              <>
+                <Eyebrow>Steps · {shown.length}</Eyebrow>
+                {hidden > 0 && <Checkbox label={`Show LangChain's internal wiring (${hidden} more)`} checked={internal} onChange={setInternal} />}
+                <ul className={t.tree} aria-label="Steps of this run">{shown.map((s) => <SpanRow key={s.run_id} span={s} />)}</ul>
+              </>
+            );
+          })()}
         </div>
       )}
     </Loaded>

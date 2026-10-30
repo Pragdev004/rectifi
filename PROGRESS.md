@@ -1,6 +1,6 @@
 # PROGRESS.md
 
-Last updated: 2026-10-25. Tests: **822 passed, 1 skipped** (`python -m pytest -q`, about 4 minutes; 455 was the count before the web app, the real baseline at its start was 487). Front-end unit tests: 81 (vitest). The 1 skipped test parses the Windows setup script and needs `pwsh` (PowerShell 7) installed.
+Last updated: 2026-10-30. Tests: **1574 passed, 3 skipped, 6 deselected** (`python3 -m pytest -q -m "not ollama"`, about 10 minutes; 822 passed at the start of the web app, 455 before it). Front-end unit tests: 137 (vitest, 12 files). The skipped tests need tools not installed here (for example `pwsh`); the deselected ones need a real Ollama.
 
 ## Built
 
@@ -129,6 +129,50 @@ Built from `docs/WEB_PLAN.md`, phases 0 to 7. Everything below ran on Linux with
 - Real bank statements and the real SMS forwarder app, as in the items below.
 - Google Fonts are blocked in the sandbox; the app uses local font files, so this does not matter, but older shots in `/tmp/rectifi-mobile` used fallback fonts.
 - `web/dist` was built here with Node 22.22.0; Node 20.19+ is required to rebuild and only 22 was tried.
+
+## AI pass (models, auto-categories, charts, library, chat, hosting)
+
+Six workstreams merged in order (`ws/llm`, `ws/classify`, `ws/host`, `ws/charts`, `ws/rag`, `ws/chat`; no merge conflicts) and then wired together by the integrator. Everything below ran on Linux with Postgres 16 and Chromium, with scripted or rule-based fake models. See `docs/CONCEPTS.md` for each LangChain and LangGraph concept, the file that uses it and the test that proves it.
+
+**What exists**
+
+- **Models.** `rectifi/agent/llm.py` roles (chat, classify, code, grade; the embedding model is separate) with Ollama as default, `dev.py llm-check`, `ollama-setup`, `classify`, `eval` and `doctor [--quick]`, an eval entry (`python -m rectifi.evals classify|charts|rag`). The Ask, Charts and Library pages show a `ModelCheck` card when a model is missing.
+- **Auto-categories.** Rules first, then the classifier model, then a "Miscellaneous" resort pass; categories carry a source (`user`, `learned`, `rule`, `heuristic`, `retrieval`, `llm`, `fallback`) and a confidence. Add > Import shows each entry's category with a source stamp, a "Why" line, Accept / Apply to similar. Ledger has a "Sorted by" filter (`?source=`). A background job sorts the rest (one worker); unfinished jobs are re-queued on start (`jobs.requeue_unfinished`).
+- **Charts.** Describe a chart, the model writes plotting code, an AST allow-list and a subprocess sandbox run it, the image is saved. Review-the-code gate, retry, pin, run again. The sandbox works on a read-only container root: it falls back to `/tmp`, and `deploy/compose.oracle.yml` mounts a tmpfs there (tested with a read-only HOME).
+- **Library (CRAG + Self-RAG).** Guides (shipped), your notes, your entries and uploads are chunked and embedded (no pgvector: embeddings are `REAL[]` columns; retrieval is vector MMR plus keyword search fused by reciprocal rank). The graph rewrites the question, retrieves, grades each passage, refines, generates, checks support and usefulness, and abstains when nothing supports an answer. The web is searched only after you agree (consent card). It never supplies a rupee amount: those come from tools.
+- **Chat, memory, traces.** One supervisor graph routes to the agent, the RAG subgraph, the chart subgraph or small talk, streams tokens from `generate`, `agent` and `smalltalk`, and pauses for memory saves, web consent and chart-code review (LangGraph `interrupt`, resumed with a boolean). Memory page (you decide what is kept), Traces page (steps with masked in/out; LangChain's own wiring is hidden behind a tick).
+- **Hosting.** `docs/HOSTING.md`, a password login with signed sessions (`/login` outside the shell, Sign out), `dev.py set-password` and `dev.py deploy-check`, `deploy/` (Dockerfile, compose, cloud-init) for an Oracle VM, Tailscale Funnel notes.
+
+**Integration decisions**
+
+- `scripts/dev.py` has one mechanism: argv dispatch of devtool commands (`models`, `deploy`) before argparse. WS-LLM's `parse_known_args` patch was replaced by it and its tests adapted.
+- Subgraphs are invoked inside supervisor nodes with no checkpointer of their own, so they inherit the parent's saver; interrupt and resume were verified across the boundary (a pooled saver is not passed separately).
+- RAG's interrupt type `web_search` is mapped to the chat kind `web_consent` in `api/ask.py` (`interrupt_kind`). The chart review gate accepts `true`/`false` or `{run, code}`.
+- `useAskStatus` was replaced by `useChatStatus` (still used by the shell and Insights), not deleted.
+- The tracked `web/node_modules` symlink that came in with `ws/rag` was removed from git (it broke `npx`); `.gitignore` covers it.
+- Chat-fake subgraphs stay only for the quick supervisor unit tests; `tests/test_chat_real_subgraphs.py` and `tests/test_chat_api.py` run the real ones with scripted models. Real graphs exposed three mismatches the fakes hid (RAG route/mode/abstained dropped by the supervisor, chart gate crash on a boolean resume, `web_search` vs `web_consent`); all fixed.
+
+**Self-critique from screenshots** (`/tmp/rectifi-ai-shots/`, all fixed)
+
+1. Ledger columns were cramped (selects cut to "Misc..."): the Source column became a "via ..." line under the Sorted-by stamp and widths were rebalanced.
+2. Import categories: the narration wrapped to five lines in a 100 px column; it is now two lines with the full text on hover, and the source stamp moved under the date.
+3. Library: "Your files" heading touched the last guide's rule (the two sections shared one grid cell).
+4. Charts: an empty result container left a double gap, and the page column was centred while every other page is left-aligned.
+5. Traces list showed a Python repr (`{"messages": ["HumanMessage: ...`); it now shows what was asked.
+6. Traces tree had 79 steps, half of them LangChain wiring (RunnableSequence, ChatPromptTemplate, "run"); those are hidden behind a tick (39 shown, failures always shown).
+7. Import filter on a phone overflowed the card (first label cut to "iscellaneous"); it is full width with shorter labels.
+8. The chat mode chip "Do" was 43 px wide (tap-target test); chips are at least 44 px.
+
+**Not verified, AI pass**
+
+- A real model. Every test and screenshot uses scripted or rule-based fakes and a toy bag-of-words embedder. Answer quality, latency, tool-calling reliability and the real embedding model with Ollama were never run. The classify eval figure (83.1%) is on a small sample file, not real statements.
+- Chart code written by a real model (the sandbox and AST checks were tested with hand-written and adversarial code only). No plotly (the stretch item was not built).
+- Windows: the Job Object limit for the chart sandbox, `dev.py deploy` helpers.
+- Docker: `docker build` / `up` of the deploy compose, aarch64 wheels, the Oracle VM, Tailscale Funnel and Serve (Host header, NDJSON buffering), real HTTPS cookies.
+- LangSmith (opt-in tracing was only tested with the switch off and a fake).
+- Real bank statements through the new categoriser; real SMS.
+- Node 20.19 rebuild of `web/dist` (built with Node 22 here).
+- The old WS-CHAT commit trailers were not squashed.
 
 ## Why
 

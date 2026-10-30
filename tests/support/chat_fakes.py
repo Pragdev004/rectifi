@@ -1,7 +1,7 @@
 """Fake RAG and chart subgraphs for the chat tests, built from the contract shapes in rectifi/agent/contracts.py.
 
-They stand in for rectifi.rag.graph and rectifi.charts.graph until the integrator swaps in the real ones. They are test
-helpers only: nothing under rectifi/ imports this file."""
+They stand in for rectifi.rag.graph and rectifi.charts.graph in the quick supervisor unit tests (the real ones run in
+test_chat_real_subgraphs.py and test_chat_api.py). They are test helpers only: nothing under rectifi/ imports this file."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ def fake_rag(answer: str = "A rainy-day fund is money set aside for surprises.",
             seen.append(dict(state))
         allowed = True
         if ask_web:
-            allowed = bool(interrupt({"kind": "web_consent", "query": state["question"]}))
+            allowed = bool(interrupt({"type": "web_search", "query": state["question"], "message": "Search the web?", "choices": ["Search", "Answer without it"]}))   # the real graph's payload
         text = answer if allowed else "I answered without the web: " + answer
-        return {"answer": text, "citations": [{"source": "guides/budgeting.md", "title": "Budgeting", "chunk": 0, "quote": "set aside"}],
+        return {"answer": text, "citations": [{"n": 1, "corpus": "guide", "label": "GUIDE", "source": "guides/budgeting.md", "title": "Budgeting", "chunk": 0, "quote": "set aside"}],
                 "trace": [{"step": "retrieve", "verdict": "ok", "detail": "1 passage"}, {"step": "generate", "verdict": "attempt 1", "detail": ""}],
                 "unverified": [], "support": "full", "useful": True}
 

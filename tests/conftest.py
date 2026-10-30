@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 # Read .env first, so TEST_DATABASE_URL set there is honoured.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+os.environ.setdefault("RECTIFI_NO_AUTO_REINDEX", "1")      # app start / import must not start an embedding thread in tests
 
 from fake_ollama import fake_ollama  # noqa: E402,F401  (the fixture: a fake Ollama server)
 

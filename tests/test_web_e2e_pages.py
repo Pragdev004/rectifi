@@ -7,6 +7,7 @@ from datetime import date
 
 import pytest
 from langchain_core.messages import AIMessage
+from support.fakes import ScriptedStructured
 from test_agent import ScriptedModel, call
 from test_web_e2e import CHECK_TARGETS
 from web_support import PINNED_TODAY, browser, live_server, new_page, pinned_today, seed_month, shot  # noqa: F401
@@ -43,7 +44,8 @@ def model(monkeypatch):
 
     def script(messages):
         scripted = ScriptedModel(script=list(messages))
-        monkeypatch.setattr("rectifi.agent.graph.get_llm", lambda: scripted)
+        monkeypatch.setattr("rectifi.agent.graph.get_llm", lambda role="chat": scripted)
+        monkeypatch.setattr("rectifi.agent.llm.get_llm", lambda role="chat": scripted if role == "chat" else ScriptedStructured())   # the chat supervisor asks for a role
         return scripted
 
     yield script

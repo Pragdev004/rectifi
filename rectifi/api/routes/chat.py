@@ -26,7 +26,7 @@ from ..errors import ApiError
 from ..inputs import api, ensure_db, query, read_json, text_field
 
 ROUTE_CHOICES = ("", "agent", "knowledge", "chart")
-MODE_CHOICES = ("auto", "plain", "crag", "self_rag", "full")
+MODE_CHOICES = ("auto", "rag", "plain", "crag", "self_rag", "full")      # "plain" is the old word for "rag"
 
 
 def uid_of(request: Request) -> str:

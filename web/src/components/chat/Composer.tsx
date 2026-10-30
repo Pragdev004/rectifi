@@ -11,7 +11,7 @@ const CHIPS: { value: Exclude<Chip, "">; label: string; hint: string }[] = [
   { value: "chart", label: "Chart", hint: "Draw a picture of your spending" },
 ];
 const STYLES: { value: AnswerStyle; label: string }[] = [
-  { value: "auto", label: "Auto" }, { value: "plain", label: "Plain" }, { value: "crag", label: "CRAG" },
+  { value: "auto", label: "Auto" }, { value: "rag", label: "Plain" }, { value: "crag", label: "CRAG" },
   { value: "self_rag", label: "Self-RAG" }, { value: "full", label: "Full" },
 ];
 

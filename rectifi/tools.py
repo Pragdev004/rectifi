@@ -359,6 +359,9 @@ def delete_transaction(txn_id: int) -> bool:
 
 # ─────────────────────────── reads ───────────────────────────
 
+CATEGORY_SOURCES = ("user", "learned", "rule", "heuristic", "retrieval", "llm", "fallback")      # how a category was chosen
+
+
 def list_transactions(
     start: date | str | None = None,
     end: date | str | None = None,
@@ -368,8 +371,18 @@ def list_transactions(
     account: str | int | None = None,
     limit: int = 200,
     unlinked: bool = False,
+    source: str | None = None,
 ) -> list[dict]:
+    """`source` filters by how the category was chosen: one of CATEGORY_SOURCES, or "earlier" for rows that have no recorded source."""
     clauses, params = [], []
+    if source:
+        if source == "earlier":
+            clauses.append("t.category_source IS NULL")
+        elif source in CATEGORY_SOURCES:
+            clauses.append("t.category_source = %s")
+            params.append(source)
+        else:
+            raise RectifiError(f"Unknown category source {source!r}. Use one of: {', '.join(CATEGORY_SOURCES)}, earlier.")
     if unlinked:
         clauses.append("t.account_id IS NULL")
     if start:

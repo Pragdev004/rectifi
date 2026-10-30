@@ -15,6 +15,12 @@ import { useIsDesktop } from "../lib/media";
 import { useUrlState } from "../lib/urlState";
 import styles from "../components/ledger/Ledger.module.css";
 
+/** "Sorted by": how the category was chosen. Matches the stamps on each row. */
+const SOURCE_FILTERS: [string, string][] = [
+  ["fallback", "Miscellaneous (not sure)"], ["llm", "Local model"], ["user", "You"], ["learned", "Taught rules"],
+  ["rule", "Built-in rules"], ["heuristic", "Narration words"], ["retrieval", "Like past choices"], ["earlier", "Before this feature"],
+];
+
 function LedgerSkeleton() {
   return (
     <div style={{ display: "grid", gap: 12 }} aria-hidden="true">
@@ -26,7 +32,7 @@ function LedgerSkeleton() {
 export default function LedgerPage() {
   const desktop = useIsDesktop();
   const meta = useMeta();
-  const [f, setF] = useUrlState({ period: "all", category: "", account: "", search: "" });
+  const [f, setF] = useUrlState({ period: "all", category: "", account: "", search: "", source: "" });
   const [text, setText] = useState(f.search);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -53,10 +59,10 @@ export default function LedgerPage() {
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  const query = useTransactions({ period: f.period, category: f.category, account: f.account, search: f.search });
+  const query = useTransactions({ period: f.period, category: f.category, account: f.account, search: f.search, source: f.source });
   const categories = meta.data?.categories ?? [];
   const accounts = meta.data?.accounts ?? [];
-  const activeFilters = [f.period !== "all", f.category !== "", f.account !== ""].filter(Boolean).length;
+  const activeFilters = [f.period !== "all", f.category !== "", f.account !== "", f.source !== ""].filter(Boolean).length;
   const open: Txn | null = openId === null ? null : query.data?.items.find((t) => t.id === openId) ?? null;
   const anyFilter = activeFilters > 0 || f.search !== "";
 
@@ -92,6 +98,16 @@ export default function LedgerPage() {
       )}
     </Field>
   );
+  const sourceField = (
+    <Field label="Sorted by">
+      {(p) => (
+        <Select {...p} value={f.source} onChange={(e) => setF({ source: e.target.value })}>
+          <option value="">Anything</option>
+          {SOURCE_FILTERS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </Select>
+      )}
+    </Field>
+  );
   const searchField = (
     <Field label="Search payee, narration or note" hideLabel={!desktop} hint={desktop ? undefined : undefined}>
       {(p) => (
@@ -107,13 +123,13 @@ export default function LedgerPage() {
     </Field>
   );
 
-  const clear = () => { setText(""); setF({ period: "all", category: "", account: "", search: "" }); };
+  const clear = () => { setText(""); setF({ period: "all", category: "", account: "", search: "", source: "" }); };
 
   return (
     <>
       <PageHeader name="Ledger" title="Ledger" />
       {desktop ? (
-        <div className={styles.filters} role="search">{periodField}{categoryField}{accountField}{searchField}</div>
+        <div className={styles.filters} role="search">{periodField}{categoryField}{accountField}{sourceField}{searchField}</div>
       ) : (
         <div className={styles.phoneBar} role="search">
           {searchField}
@@ -128,7 +144,7 @@ export default function LedgerPage() {
           <Button variant="primary" onClick={() => setFiltersOpen(false)}>Show entries</Button>
         </>
       }>
-        <div className={styles.filterStack}>{periodField}{categoryField}{accountField}</div>
+        <div className={styles.filterStack}>{periodField}{categoryField}{accountField}{sourceField}</div>
       </Dialog>
 
       <Loaded query={query} skeleton={<LedgerSkeleton />}>

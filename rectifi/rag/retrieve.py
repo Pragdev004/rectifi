@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from operator import itemgetter
 
@@ -31,12 +30,10 @@ RRF_K = 60
 
 
 def refine_tau() -> float:
-    """Sentences less similar to the question than this are dropped by refine. RECTIFI_RAG_REFINE_TAU, default 0.2.
-    A starting point for nomic-embed-text; the eval decides the right value for your model."""
-    try:
-        return float(os.getenv("RECTIFI_RAG_REFINE_TAU", "0.2"))
-    except ValueError:
-        return 0.2
+    """Kept for the callers and tests that already use this name; the setting lives in config.rag_refine_tau."""
+    from .. import config
+
+    return config.rag_refine_tau()
 
 
 def doc_key(doc: Document) -> str:

@@ -2,17 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { get, post, qs } from "./client";
 import type { Txn } from "./types";
 
-/** How a category was chosen. Rows from before this feature have no source (null). */
-export type CategorySource = "user" | "learned" | "rule" | "heuristic" | "retrieval" | "llm" | "fallback";
+export type { CategorySource } from "./types";
 
-/** The fields the server adds to every transaction. Percent fields are whole numbers (82), never money. */
-export interface ClassifyFields {
-  category_source: CategorySource | null;
-  category_confidence: number | null;
-  category_reason: string | null;
-  suggested_category: string | null;
-  suggested_confidence: number | null;
-}
+/** The fields the server adds to every transaction (they are optional on `Txn`). Percent fields are whole numbers (82), never money. */
+export type ClassifyFields = Required<Pick<Txn, "category_source" | "category_confidence" | "category_reason" | "suggested_category" | "suggested_confidence">>;
 export type SortedTxn = Txn & ClassifyFields;
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled" | "no_model";

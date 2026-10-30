@@ -1,59 +1,16 @@
 import { ChevronLeft, ChevronRight, RotateCcw, TriangleAlert } from "lucide-react";
-import type { ChatItem, Citation, TraceEvent } from "../../api/chat";
+import type { ChatItem } from "../../api/chat";
 import { Markdown } from "../../lib/markdown";
 import { formatInr } from "../../lib/money";
 import { LinkButton, Button, IconButton } from "../forms";
+import { Citations } from "../rag/Citations";
+import { ReflectionTrace } from "../rag/ReflectionTrace";
 import { Disclosure, Eyebrow, Stamp } from "../ui";
 import { ROUTE_STAMP, msgTime, type Live, workingLine } from "./helpers";
 import { useElapsed } from "./useElapsed";
 import c from "./chat.module.css";
 
 type Assistant = Extract<ChatItem, { role: "assistant" }>;
-
-/** GUIDE / YOUR NOTE / YOUR ENTRY from where a passage came from. */
-export function corpusStamp(source: string): string {
-  if (source.startsWith("guide")) return "Guide";
-  if (source.startsWith("note")) return "Your note";
-  if (source.startsWith("txn") || source.startsWith("entry")) return "Your entry";
-  if (source.startsWith("upload")) return "Your file";
-  return "Source";
-}
-
-function Sources({ citations }: { citations: Citation[] }) {
-  if (citations.length === 0) return null;
-  return (
-    <Disclosure summary={`Sources · ${citations.length}`}>
-      <ol className={c.ruled} data-testid="chat-sources">
-        {citations.map((s, i) => (
-          <li key={i}>
-            <span><span className={c.num}>[{i + 1}]</span> <Stamp>{corpusStamp(s.source)}</Stamp></span>
-            <span>{s.title}{s.quote && <span className={c.snippet}>{s.quote}</span>}</span>
-          </li>
-        ))}
-      </ol>
-    </Disclosure>
-  );
-}
-
-function HowChecked({ checks, trace, support, useful }: { checks: TraceEvent[]; trace: TraceEvent[]; support: string | null; useful: boolean | null }) {
-  const rows = [...trace, ...checks.filter((e) => e.step !== "turn")];
-  if (rows.length === 0) return null;
-  const tone = (e: TraceEvent) => (/unverified|fail|unavailable|declined/.test(e.verdict) ? "near" : "neutral");
-  return (
-    <Disclosure summary="How this answer was checked">
-      <ul className={c.ruled} data-testid="chat-trace">
-        {rows.map((e, i) => (
-          <li key={i}>
-            <Stamp tone={tone(e)}>{e.step}</Stamp>
-            <span>{e.verdict}{e.detail && <span className={c.snippet}>{e.detail}</span>}</span>
-          </li>
-        ))}
-        {support && <li><Stamp tone={support === "full" ? "ok" : "near"}>Supported</Stamp><span>{support}</span></li>}
-        {useful !== null && <li><Stamp tone={useful ? "ok" : "near"}>Useful</Stamp><span>{useful ? "yes" : "no"}</span></li>}
-      </ul>
-    </Disclosure>
-  );
-}
 
 function Steps({ steps }: { steps: Assistant["steps"] }) {
   if (steps.length === 0) return null;
@@ -119,8 +76,8 @@ export function AssistantTurn({
           <LinkButton to={`/charts?chart=${item.artifact.chart_id}`}>Open in Charts</LinkButton>
         </div>
       )}
-      {!earlier && <Sources citations={item.citations} />}
-      {!earlier && <HowChecked checks={item.checks} trace={item.trace} support={item.support} useful={item.useful} />}
+      {!earlier && <Citations citations={item.citations} idPrefix={`source-${item.id ?? "m"}`} />}
+      {!earlier && <ReflectionTrace trace={[...item.trace, ...item.checks.filter((e) => e.step !== "turn").map((e) => ({ ...e, step: e.step.toUpperCase() }))]} />}
       {!earlier && <Steps steps={item.steps} />}
       {last && (
         <div className={c.afterReply}>

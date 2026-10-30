@@ -40,7 +40,7 @@ from . import memory as mem
 from .contracts import ChartInput, RagInput
 
 ROUTES = ("agent", "knowledge", "chart", "smalltalk", "remember")
-ANSWER_STYLES = {"auto": "auto", "plain": "rag", "crag": "crag", "self_rag": "self_rag", "full": "full"}
+ANSWER_STYLES = {"auto": "auto", "rag": "rag", "plain": "rag", "crag": "crag", "self_rag": "self_rag", "full": "full"}
 CHIPS = {"do": "agent", "agent": "agent", "lookup": "knowledge", "knowledge": "knowledge", "chart": "chart"}
 # Nodes whose model tokens are the answer the person reads. Graders, rewriters and the router stay out of the stream.
 FINAL_NODES = frozenset({"agent", "smalltalk", "generate"})
@@ -363,7 +363,7 @@ def build_supervisor(*, checkpointer, store=None, agent_graph=None, agent_llm=No
         out = worker.invoke(payload, config)
         reply = AIMessage(out.get("answer") or "I couldn't find that in the guides.", id=str(uuid.uuid4()), additional_kwargs={
             "citations": out.get("citations") or [], "trace": out.get("trace") or [], "unverified_claims": out.get("unverified") or [],
-            "support": out.get("support"), "useful": out.get("useful")})
+            "support": out.get("support"), "useful": out.get("useful"), "rag_mode": out.get("mode"), "abstained": bool(out.get("abstained"))})
         return {"messages": [_stamp(reply, "knowledge")], "events": [say("knowledge", "answered", f"{len(out.get('citations') or [])} source(s)")]}
 
     def chart(state: SupervisorState, config: RunnableConfig):

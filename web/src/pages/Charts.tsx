@@ -1,5 +1,6 @@
 import { Pencil } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearch } from "wouter";
 import { ApiError } from "../api/client";
 import { streamChart, useChartActions, useChartStatus, useCharts, type ChartDetail, type DrawEvent, type TraceRow } from "../api/charts";
 import { ChartGallery } from "../components/charts/ChartGallery";
@@ -94,6 +95,16 @@ export default function ChartsPage() {
       toast(e instanceof Error ? e.message : "Couldn't open that chart.", "over");
     }
   };
+
+  // A chat answer links here with /charts?chart=<id>: open that chart once.
+  const wanted = new URLSearchParams(useSearch()).get("chart");
+  const opened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!wanted || opened.current === wanted || !/^\d{1,9}$/.test(wanted)) return;
+    opened.current = wanted;
+    void open(Number(wanted));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wanted]);
   const rerun = async (id: number) => {
     setRerunId(id);
     try {
@@ -140,7 +151,7 @@ export default function ChartsPage() {
         </div>
       </form>
 
-      <div ref={resultRef}>
+      <div ref={resultRef} hidden={phase.kind === "idle"}>
         {phase.kind === "drawing" && <ChartProgress events={phase.events} startedAt={phase.startedAt} />}
         {phase.kind === "review" && (
           <ReviewGate code={phase.code} busy={phase.busy}

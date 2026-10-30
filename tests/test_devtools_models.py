@@ -297,10 +297,3 @@ def test_dev_py_lists_the_commands(models):
 
     out = subprocess.run([sys.executable, str(ROOT / "scripts" / "dev.py"), "--help"], capture_output=True, text=True, cwd=ROOT).stdout
     assert "llm-check" in out and "ollama-setup" in out
-
-
-def test_eval_reports_not_built_yet_for_a_missing_module(models, monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(models, "project_python", lambda: sys.executable)
-    monkeypatch.setattr(models, "ROOT", tmp_path)                      # an empty project: rectifi.evals does not exist there
-    models.run_eval(["rag"])
-    assert "eval rag: not built yet." in capsys.readouterr().out

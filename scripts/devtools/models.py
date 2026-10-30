@@ -446,22 +446,24 @@ def project_python() -> str:
 
 CLASSIFY_SNIPPET = """
 import sys
-try:
-    from rectifi.agent.classify import classify_pending
-except ModuleNotFoundError:
-    print('classify: not built yet.')
-    sys.exit(0)
+from rectifi import tools
+from rectifi.agent import jobs
+from rectifi.agent.classify import classify_pending
+from rectifi.db import init_db
+
+init_db()
 raw = sys.argv[1] if len(sys.argv) > 1 else ''
-try:
-    out = classify_pending(int(raw) if raw else None, progress=lambda *a: print('...', *a, flush=True))
-except NotImplementedError as exc:
-    print('classify: not built yet.')
-    sys.exit(0)
-print(out)
+if raw:
+    print(classify_pending(int(raw), progress=lambda *a: print('...', *a, flush=True)))
+else:
+    waiting = tools.queue_miscellaneous_resort()
+    print(f'{waiting} entries are waiting for a category.')
+    print(classify_pending(None, progress=lambda *a: print('...', *a, flush=True)))
 """
 
 
 def classify(args: list[str]) -> None:
+    """With a batch number: sort that import. Without: mark every undecided Miscellaneous entry and sort them all."""
     batch = next((a for a in args if a.isdigit()), "")
     code = subprocess.run([project_python(), "-c", CLASSIFY_SNIPPET, batch], cwd=ROOT).returncode
     if code:
@@ -472,15 +474,9 @@ def run_eval(args: list[str]) -> None:
     which = next((a for a in args if not a.startswith("-")), "classify")
     if which not in ("classify", "charts", "rag"):
         sys.exit("eval takes one of: classify, charts, rag.")
-    module = f"rectifi.evals.{which}"
-    result = subprocess.run([project_python(), "-m", module, *[a for a in args if a != which]], cwd=ROOT, capture_output=True, text=True)
-    sys.stdout.write(result.stdout)
-    if result.returncode and "No module named" in result.stderr and module in result.stderr:
-        print(f"eval {which}: not built yet.")
-        return
-    sys.stderr.write(result.stderr)
-    if result.returncode:
-        sys.exit(result.returncode)
+    code = subprocess.run([project_python(), "-m", "rectifi.evals", which, *[a for a in args if a != which]], cwd=ROOT).returncode
+    if code:
+        sys.exit(code)
 
 
 # dev.py reads this: command name -> (function, one-line help)

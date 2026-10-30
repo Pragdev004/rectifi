@@ -121,11 +121,6 @@ def test_a_role_names_a_model_for_the_other_providers_too(clean_roles, monkeypat
     assert llm.get_llm("classify").model_name == "vendor/free-model:free"
 
 
-def test_probe_is_left_to_ws_llm():
-    with pytest.raises(NotImplementedError):
-        llm.probe()
-
-
 # ───────────── contracts ─────────────
 
 def test_contracts_shapes_and_lazy_owners():
@@ -331,10 +326,11 @@ def run_dev(*args):
     return subprocess.run([sys.executable, str(ROOT / "scripts" / "dev.py"), *args], capture_output=True, text=True, timeout=60)
 
 
-@pytest.mark.parametrize("command", ["ollama-setup", "classify", "eval", "set-password", "deploy-check"])
-def test_dev_commands_delegate_to_the_stub_modules(command):
-    result = run_dev(command)
-    assert result.returncode == 0 and "not built yet" in result.stdout
+def test_evals_dispatch_and_dev_eval_passes_options_through():
+    bad = subprocess.run([sys.executable, "-m", "rectifi.evals", "nope"], capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert bad.returncode == 2 and "Usage" in bad.stdout
+    rag = run_dev("eval", "rag")                      # no --live: says so and exits 2 (no database, no model needed)
+    assert rag.returncode == 2 and "Nothing to run" in rag.stdout
 
 
 def test_dev_help_lists_the_new_commands():

@@ -12,6 +12,7 @@ the worker thread, so importing this module loads no model library. One worker p
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -79,6 +80,16 @@ def start_reindex(corpora: tuple[str, ...] = ("guide", "note", "upload", "txn"))
         _job["total"] = total
     threading.Thread(target=_run_job, args=(corpora,), name="rag-reindex", daemon=True).start()
     return True
+
+
+def auto_reindex(corpora: tuple[str, ...] = ("guide", "note", "upload", "txn")) -> bool:
+    """The automatic re-index (app start, after an import). Off when RECTIFI_NO_AUTO_REINDEX=1 (tests set it). Never raises."""
+    if os.getenv("RECTIFI_NO_AUTO_REINDEX", "").strip() == "1":
+        return False
+    try:
+        return start_reindex(corpora)
+    except Exception:                                           # noqa: BLE001
+        return False
 
 
 def join_job(timeout: float = 30.0) -> None:

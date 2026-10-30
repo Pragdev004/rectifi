@@ -1,5 +1,6 @@
 import { Hourglass } from "lucide-react";
-import { useAskStatus, useInsights } from "../api/queries";
+import { useChatStatus } from "../api/chat";
+import { useInsights } from "../api/queries";
 import type { Insight, InsightsList } from "../api/types";
 import { LinkButton } from "../components/forms";
 import { InsightRow } from "../components/InsightRow";
@@ -35,7 +36,7 @@ function Groups({ data, explainOk }: { data: InsightsList; explainOk: boolean })
 }
 
 function InsightsBody({ data }: { data: InsightsList }) {
-  const ask = useAskStatus();
+  const ask = useChatStatus();
   const explainOk = ask.data?.ok === true;
   if (data.span.count === 0) {
     return (

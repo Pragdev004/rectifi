@@ -115,7 +115,8 @@ def test_only_the_app_publishes_a_port_and_only_on_loopback():
 
 def test_app_is_locked_down():
     app = COMPOSE_DOC["services"]["app"]
-    assert app["read_only"] is True and "/tmp" in app["tmpfs"]
+    assert app["read_only"] is True and any(t.split(":")[0] == "/tmp" for t in app["tmpfs"])
+    assert app["environment"]["RECTIFI_HOME"].startswith("/tmp/")      # the chart sandbox font cache must be inside the writable tmpfs
     assert app["mem_limit"] == "2g" and app["cap_drop"] == ["ALL"] and "no-new-privileges:true" in app["security_opt"]
     assert app["depends_on"]["db"]["condition"] == "service_healthy"
     assert app["env_file"] == "../.env.deploy"

@@ -38,30 +38,38 @@ function NotFound() {
   );
 }
 
+function Pages() {
+  return (
+    <AppShell>
+      <Switch>
+        <Route path="/" component={Overview} />
+        <Route path="/overview" component={Overview} />
+        <Route path="/review" component={ReviewPage} />
+        <Route path="/insights" component={InsightsPage} />
+        <Route path="/add" component={Add} />
+        <Route path="/ledger" component={Ledger} />
+        <Route path="/budgets" component={Budgets} />
+        <Route path="/accounts" component={Accounts} />
+        <Route path="/phone" component={PhonePage} />
+        <Route path="/ask" component={AskPage} />
+        <Route path="/charts" component={ChartsPage} />
+        <Route path="/library" component={LibraryPage} />
+        <Route path="/memory" component={MemoryPage} />
+        <Route path="/traces" component={TracesPage} />
+        <Route><NotFound /></Route>
+      </Switch>
+    </AppShell>
+  );
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={client}>
       <ToastProvider>
-        <AppShell>
-          <Switch>
-            <Route path="/" component={Overview} />
-            <Route path="/overview" component={Overview} />
-            <Route path="/review" component={ReviewPage} />
-            <Route path="/insights" component={InsightsPage} />
-            <Route path="/add" component={Add} />
-            <Route path="/ledger" component={Ledger} />
-            <Route path="/budgets" component={Budgets} />
-            <Route path="/accounts" component={Accounts} />
-            <Route path="/phone" component={PhonePage} />
-            <Route path="/ask" component={AskPage} />
-            <Route path="/charts" component={ChartsPage} />
-            <Route path="/library" component={LibraryPage} />
-            <Route path="/memory" component={MemoryPage} />
-            <Route path="/traces" component={TracesPage} />
-            <Route path="/login" component={LoginPage} />
-            <Route><NotFound /></Route>
-          </Switch>
-        </AppShell>
+        <Switch>
+          <Route path="/login" component={LoginPage} />   {/* outside the shell: no sidebar before you are signed in */}
+          <Route component={Pages} />
+        </Switch>
       </ToastProvider>
     </QueryClientProvider>
   );

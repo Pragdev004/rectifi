@@ -1,5 +1,5 @@
 /* Charts page. Passbook rules: no card grid, a border only on slips, one accent, stamps carry a word. */
-.page { max-width: 56rem; margin: 0 auto; display: grid; gap: var(--s-6); }
+.page { max-width: 56rem; display: grid; gap: var(--s-6); }
 .prompt { display: grid; gap: var(--s-4); }
 .examples { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .controls { display: flex; flex-wrap: wrap; gap: var(--s-4); align-items: end; }

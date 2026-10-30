@@ -1,8 +1,9 @@
-import { BookText, Ellipsis, House, MessageSquare, Plus, WifiOff } from "lucide-react";
+import { BookText, Ellipsis, House, LogOut, MessageSquare, Plus, WifiOff } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { useAskStatus } from "../../api/queries";
+import { useSignOut, useAuthStatus } from "../../api/auth";
+import { useChatStatus } from "../../api/chat";
 import { useOffline } from "../../api/client";
 import { cx } from "../../lib/cx";
 import { setTheme, useTheme, type ThemeChoice } from "../../lib/theme";
@@ -27,6 +28,19 @@ export function ThemeSwitch() {
   return <SegmentedControl legend="Colour theme" name="theme" options={THEME_OPTIONS} value={theme} onChange={setTheme} full />;
 }
 
+/** Only when a password is set and you are signed in. On a laptop with no password nothing is drawn. */
+function SignOut({ onDone }: { onDone?: () => void }) {
+  const auth = useAuthStatus();
+  const out = useSignOut();
+  if (!auth.data?.required || !auth.data.signed_in) return null;
+  return (
+    <Button variant="tertiary" block loading={out.isPending} loadingLabel="Signing out…" icon={<LogOut size={16} strokeWidth={1.5} aria-hidden="true" />}
+      onClick={() => { onDone?.(); out.mutate(); }}>
+      Sign out
+    </Button>
+  );
+}
+
 function NavLink({ item, path }: { item: NavItem; path: string }) {
   const Icon = item.icon;
   return (
@@ -38,7 +52,7 @@ function NavLink({ item, path }: { item: NavItem; path: string }) {
 }
 
 function Sidebar({ path }: { path: string }) {
-  const model = useAskStatus();
+  const model = useChatStatus();
   const modelLine = model.data ? (model.data.ok ? `Model: ${model.data.model}` : "Assistant is off") : "";
   return (
     <aside className={styles.sidebar}>
@@ -67,6 +81,7 @@ function Sidebar({ path }: { path: string }) {
           <ThemeSwitch />
         </div>
         {modelLine && <p className={styles.modelLine}>{modelLine}</p>}
+        <SignOut />
       </div>
     </aside>
   );
@@ -140,6 +155,7 @@ function MoreSheet({ open, onClose, path }: { open: boolean; onClose: () => void
         <Eyebrow as="span">Theme</Eyebrow>
         <ThemeSwitch />
       </div>
+      <div className={styles.moreTheme}><SignOut onDone={onClose} /></div>
     </Dialog>
   );
 }

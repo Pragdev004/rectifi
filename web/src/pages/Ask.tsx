@@ -9,6 +9,7 @@ import {
 import { refreshBooks } from "../api/queries";
 import type { AskStatus } from "../api/types";
 import { Composer } from "../components/chat/Composer";
+import { ModelCheck } from "../components/ModelCheck";
 import { InterruptCard } from "../components/chat/InterruptCard";
 import { AssistantTurn, LiveTurn, UserTurn } from "../components/chat/Message";
 import { ThreadList } from "../components/chat/ThreadList";
@@ -45,7 +46,7 @@ type Starter = (on: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void
 
 // ── one conversation ──
 
-function Conversation({ threadId, onCreated, status }: { threadId: string | null; onCreated: (id: string) => void; status: AskStatus }) {
+function Conversation({ threadId, onCreated, status, readOnly }: { threadId: string | null; onCreated: (id: string) => void; status: AskStatus; readOnly: boolean }) {
   const client = useQueryClient();
   const [items, setItems] = useState<ChatItem[]>([]);
   const [alts, setAlts] = useState<Alternative[]>([]);
@@ -181,7 +182,17 @@ function Conversation({ threadId, onCreated, status }: { threadId: string | null
   return (
     <div className={c.convCol}>
       {status.notice && <Callout tone="note">{status.notice}</Callout>}
-      {empty && (
+      {readOnly && (
+        <Callout tone="near" icon={Bot} lead="The assistant is off, so this conversation is read-only." role="status">
+          {status.why || "The rest of Rectifi works."} You can still read your past conversations.
+        </Callout>
+      )}
+      {readOnly && empty && (
+        <EmptyState title="Nothing to read here yet." actions={<LinkButton to="/add" variant="primary">Go to Add</LinkButton>}>
+          Pick an earlier conversation from the list, or add entries and import statements by hand.
+        </EmptyState>
+      )}
+      {!readOnly && empty && (
         <section aria-label="Try one of these">
           <Eyebrow>Try</Eyebrow>
           <div className={c.examples}>
@@ -195,7 +206,7 @@ function Conversation({ threadId, onCreated, status }: { threadId: string | null
             <UserTurn key={item.id ?? `u${i}`} item={item} />
           ) : (
             <AssistantTurn
-              key={item.id ?? `a${i}`} item={item} last={i === lastAt && !busy && interrupt === null} busy={busy}
+              key={item.id ?? `a${i}`} item={item} last={i === lastAt && !busy && interrupt === null && !readOnly} busy={busy}
               alternatives={i === lastAt ? alts.length : 0}
               earlier={i === lastAt && picked.alt && offset > 0 ? { text: picked.alt.text, ts: picked.alt.ts, index: picked.index, total: picked.total } : null}
               onAnswerAgain={() => void answerAgain()}
@@ -204,16 +215,17 @@ function Conversation({ threadId, onCreated, status }: { threadId: string | null
           ),
         )}
         {live && <LiveTurn live={live} />}
-        {interrupt && <InterruptCard interrupt={interrupt} busy={busy} onAnswer={(v) => void answerQuestion(v)} />}
+        {interrupt && !readOnly && <InterruptCard interrupt={interrupt} busy={busy} onAnswer={(v) => void answerQuestion(v)} />}
         {error && (
           <div className={c.error} role="alert" data-testid="ask-error">
             <Callout tone="over" lead={error.message === "Still answering your last message." ? "Hold on." : "That did not go through."}>{error.message}</Callout>
             <Button variant="secondary" onClick={error.retry}>Try again</Button>
+            {status.ok && <ModelCheck role="chat" />}
           </div>
         )}
         <div ref={end} className={c.end} />
       </div>
-      <Composer busy={busy} stopping={live?.stopping ?? false} onSend={(t, o) => void send(t, o)} onStop={() => void stop()} />
+      {!readOnly && <Composer busy={busy} stopping={live?.stopping ?? false} onSend={(t, o) => void send(t, o)} onStop={() => void stop()} />}
     </div>
   );
 }
@@ -275,13 +287,14 @@ function ChatPage({ status }: { status: AskStatus }) {
         controls={desktop ? undefined : (
           <>
             <Button variant="secondary" icon={<MessageSquare size={16} strokeWidth={1.5} aria-hidden="true" />} onClick={() => setSheet(true)}>Conversations</Button>
-            <Button variant="secondary" aria-label="New conversation" icon={<Plus size={16} strokeWidth={1.5} aria-hidden="true" />} onClick={() => open(null)} />
+            <Button variant="secondary" aria-label="New conversation" disabled={!status.ok} icon={<Plus size={16} strokeWidth={1.5} aria-hidden="true" />} onClick={() => open(null)} />
           </>
         )}
       />
+      <ModelCheck role="chat" hideWhenOk className={c.modelCheck} />
       <div className={c.shell}>
         {desktop && <aside className={c.listCol}>{list}</aside>}
-        <Conversation key={nav} threadId={active} status={status} onCreated={(id) => setActive(id)} />
+        <Conversation key={nav} threadId={active} status={status} readOnly={!status.ok} onCreated={(id) => setActive(id)} />
       </div>
       {!desktop && (
         <Dialog open={sheet} onClose={() => setSheet(false)} title="Conversations" sheet>{list}</Dialog>
@@ -294,19 +307,8 @@ export default function AskPage() {
   const status = useChatStatus();
   return (
     <Loaded query={status} skeleton={<div className={cx(styles.skelStack)} aria-hidden="true"><Skeleton height={40} width="50%" /><Skeleton height={80} /></div>}>
-      {(s) =>
-        s.ok ? (
-          <ChatPage status={s} />
-        ) : (
-          <>
-            <PageHeader name="Ask" title="Ask Rectifi" sub={`Model: ${s.model} · amounts are checked against what you type before anything is saved`} />
-            <Callout tone="near" icon={Bot} lead="The assistant is not ready." role="status">{s.why}</Callout>
-            <EmptyState title="The assistant is off — the rest of Rectifi works." actions={<LinkButton to="/add" variant="primary">Go to Add</LinkButton>}>
-              You can still add entries, import statements and set budgets by hand.
-            </EmptyState>
-          </>
-        )
-      }
+      {/* Also when the assistant is off: the past conversations stay readable (on a phone too), with the model check above them. */}
+      {(s) => <ChatPage status={s} />}
     </Loaded>
   );
 }

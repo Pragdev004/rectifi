@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery, type QueryClient } from "@tanstack/react-query";
 import { get, qs } from "./client";
 import type {
-  AccountsPage, AskStatus, BudgetsPage, Device, InboxItem, InsightsList, Meta, Overview, PhoneStatus, Review, TransactionList,
+  AccountsPage, BudgetsPage, Device, InboxItem, InsightsList, Meta, Overview, PhoneStatus, Review, TransactionList,
 } from "./types";
 
 export const keys = {
@@ -15,7 +15,6 @@ export const keys = {
   phoneStatus: ["phone", "status"] as const,
   phoneDevices: ["phone", "devices"] as const,
   phoneInbox: ["phone", "inbox"] as const,
-  askStatus: ["ask", "status"] as const,
 };
 
 /** After any change to the books, everything that shows figures is out of date. */
@@ -48,6 +47,8 @@ export interface TxnParams {
   category: string;
   account: string;
   search: string;
+  /** How the category was chosen ("" = any): user, learned, rule, heuristic, retrieval, llm, fallback, earlier. */
+  source: string;
 }
 export const useTransactions = (params: TxnParams) =>
   useQuery({
@@ -68,6 +69,3 @@ export const useAccounts = () => useQuery({ queryKey: keys.accounts, queryFn: ({
 export const usePhoneStatus = () => useQuery({ queryKey: keys.phoneStatus, queryFn: ({ signal }) => get<PhoneStatus>("/phone/status", signal) });
 export const usePhoneDevices = () => useQuery({ queryKey: keys.phoneDevices, queryFn: ({ signal }) => get<Device[]>("/phone/devices", signal) });
 export const usePhoneInbox = () => useQuery({ queryKey: keys.phoneInbox, queryFn: ({ signal }) => get<InboxItem[]>("/phone/inbox", signal) });
-
-export const useAskStatus = () =>
-  useQuery({ queryKey: keys.askStatus, queryFn: ({ signal }) => get<AskStatus>("/ask/status", signal), staleTime: 30_000 });

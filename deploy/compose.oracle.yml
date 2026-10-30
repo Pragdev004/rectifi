@@ -78,11 +78,15 @@ services:
       # The Host header must be on this list. 127.0.0.1 is for the container's own health check.
       RECTIFI_ALLOWED_HOSTS: ${RECTIFI_HOSTNAME:?set RECTIFI_HOSTNAME in .env.deploy},localhost,127.0.0.1
       RECTIFI_ALLOWED_ORIGINS: https://${RECTIFI_HOSTNAME}
+      RECTIFI_HOME: /tmp/rectifi
+      TMPDIR: /tmp
     ports:
       - "127.0.0.1:8501:8501"
+    # The root file system is read-only. The chart sandbox, the font cache and uploads' temp files all live in /tmp (a tmpfs:
+    # it is wiped on restart, which only costs one slow first chart). RECTIFI_HOME points the font cache there too.
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:size=256m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:

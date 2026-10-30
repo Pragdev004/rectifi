@@ -1,6 +1,5 @@
 import { Ellipsis } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ClassifyFields } from "../../api/classify";
 import type { AccountRef, Category, Txn } from "../../api/types";
 import { fmtDay, fmtShort } from "../../lib/dates";
 import { cx } from "../../lib/cx";
@@ -43,8 +42,7 @@ function Row({ t, categories, accounts, onOpen }: { t: Txn; categories: Category
   const status = (field: Field) =>
     busy === field ? <span className={styles.status}>Saving…</span> : saved === field ? <span className={cx(styles.status, styles.saved)}>Saved</span> : null;
   const name = payeeOf(t);
-  const sorted = t as Txn & Partial<ClassifyFields>;
-  const how = sorted.category_source ?? null;
+  const how = t.category_source ?? null;
 
   return (
     <>
@@ -80,10 +78,10 @@ function Row({ t, categories, accounts, onOpen }: { t: Txn; categories: Category
           {status("account")}
         </td>
         <td className={styles.amountCell}><TxnAmount t={t} /></td>
-        <td className={styles.sorted} title={how ? `${sourceHelp[how]}${sorted.category_reason ? ` ${sorted.category_reason}.` : ""}` : "Added before Rectifi recorded how categories are chosen."}>
-          <SourceStamp source={how} confidence={sorted.category_confidence} />
+        <td className={styles.sorted} title={how ? `${sourceHelp[how]}${t.category_reason ? ` ${t.category_reason}.` : ""}` : "Added before Rectifi recorded how categories are chosen."}>
+          <SourceStamp source={how} confidence={t.category_confidence} />
+          <small className={styles.via}>via {t.source}</small>
         </td>
-        <td className={styles.src}>{t.source}</td>
         <td className={styles.noteCell} aria-busy={busy === "note" || undefined}>
           <TextInput
             aria-label={`Note for ${name}, ${fmtDay(t.date)}`}
@@ -104,7 +102,7 @@ function Row({ t, categories, accounts, onOpen }: { t: Txn; categories: Category
         </td>
       </tr>
       {error && (
-        <tr className={styles.errorRow}><td colSpan={9} role="alert">{error}</td></tr>
+        <tr className={styles.errorRow}><td colSpan={8} role="alert">{error}</td></tr>
       )}
     </>
   );
@@ -122,7 +120,6 @@ export function LedgerTable({ items, categories, accounts, onOpen }: { items: Tx
             <th scope="col">Account</th>
             <th scope="col" className={styles.num}>Amount</th>
             <th scope="col">Sorted by</th>
-            <th scope="col">Source</th>
             <th scope="col">Note</th>
             <th scope="col"><span className="sr-only">Actions</span></th>
           </tr>

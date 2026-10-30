@@ -14,9 +14,9 @@ import styles from "./ImportCategories.module.css";
 
 const FILTERS: { value: Show; label: string }[] = [
   { value: "all", label: "All" },
-  { value: "misc", label: "Miscellaneous" },
-  { value: "model", label: "Decided by the model" },
-  { value: "suggested", label: "Suggestions" },
+  { value: "misc", label: "Misc." },
+  { value: "model", label: "By the model" },
+  { value: "suggested", label: "Suggested" },
 ];
 
 /** "312 entries · 241 by rules · 38 like your past choices · 20 by the local model · 13 in Miscellaneous". Zero parts are left out. */
@@ -93,7 +93,7 @@ function RowItem({ t, batchId }: { t: SortedTxn; batchId: number }) {
       <span className={styles.date}>{fmtShort(t.date)}</span>
       <span className={styles.payee}>
         <strong>{name}</strong>
-        {t.description && t.description !== t.payee && <small>{t.description}</small>}
+        {t.description && t.description !== t.payee && <small title={t.description}>{t.description}</small>}
       </span>
       <span className={styles.amount}><TxnAmount t={t} /></span>
       <span className={styles.cat}>
@@ -186,7 +186,7 @@ export function ImportCategories({ batchId }: { batchId: number }) {
         </div>
       )}
       {startError && <p className={styles.error} role="alert">{startError}</p>}
-      <SegmentedControl legend="Show entries" name="import-show" options={FILTERS} value={show} onChange={setShow} />
+      <SegmentedControl full legend="Show entries" name="import-show" options={FILTERS} value={show} onChange={setShow} />
       {data.items.length === 0 ? (
         <p className={styles.help}>Nothing here.</p>
       ) : (

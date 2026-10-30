@@ -3,8 +3,8 @@ import type { TraceEvent } from "../../api/knowledge";
 import styles from "./rag.module.css";
 
 const GOOD = new Set(["CORRECT", "FULLY", "YES", "TRACED", "NONE", "READ-ONLY"]);
-const WARN = new Set(["AMBIGUOUS", "PARTLY", "UNSURE", "WITH CAVEAT", "DECLINED", "ASKED"]);
-const BAD = new Set(["INCORRECT", "NO", "NOT TRACED", "WITHHELD", "NOT FOUND"]);
+const WARN = new Set(["AMBIGUOUS", "PARTLY", "UNSURE", "WITH CAVEAT", "DECLINED", "ASKED", "UNAVAILABLE"]);
+const BAD = new Set(["INCORRECT", "NO", "NOT TRACED", "WITHHELD", "NOT FOUND", "UNVERIFIED", "FAILED"]);
 
 /** The colour of a trace stamp. A stamp always carries a word too, so colour is never the only signal. */
 export function toneFor(verdict: string): Tone {

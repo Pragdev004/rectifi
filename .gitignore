@@ -34,3 +34,7 @@ web/node_modules/
 web/*.tsbuildinfo
 web/node_modules/.vite/
 web/test-results/
+
+# Hosting: the deploy settings file (secrets) and database backups
+.env.deploy
+backups/

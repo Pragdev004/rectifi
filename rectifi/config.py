@@ -227,6 +227,20 @@ RAG_CHUNK_OVERLAP = _int_env("RECTIFI_RAG_CHUNK_OVERLAP", 120, 0, 1000)
 RAG_MAX_REGENERATE = _int_env("RECTIFI_RAG_MAX_REGENERATE", 2, 0, 5)        # Self-RAG: rewrite an unsupported answer at most this often
 RAG_MAX_RETRIEVE = _int_env("RECTIFI_RAG_MAX_RETRIEVE", 2, 0, 5)            # CRAG: re-retrieve at most this often
 
+def rag_refine_tau() -> float:
+    """CRAG refine: sentences less similar to the question than this are dropped (RECTIFI_RAG_REFINE_TAU, default 0.2).
+    A starting point for nomic-embed-text; the knowledge eval decides the right value for your model."""
+    try:
+        return float(os.getenv("RECTIFI_RAG_REFINE_TAU", "").strip() or 0.2)
+    except ValueError:
+        return 0.2
+
+
+def embed_prefixes() -> bool:
+    """nomic-embed-text wants "search_document: " / "search_query: " prefixes. RECTIFI_EMBED_PREFIXES=0 switches them off."""
+    return os.getenv("RECTIFI_EMBED_PREFIXES", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
 # Traces.
 TRACE_RETENTION_DAYS = _int_env("RECTIFI_TRACE_DAYS", 14, 1, 365)
 TRACE_MAX_ROWS = _int_env("RECTIFI_TRACE_ROWS", 20_000, 100, 10**7)

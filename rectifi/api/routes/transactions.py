@@ -36,8 +36,11 @@ def list_transactions(request):
     if search and len(search) > 100:
         raise ApiError(422, "invalid", "That search is too long.", "search")
     limit = _limit(request)
+    source = query(request, "source")
+    if source and source != "earlier" and source not in tools.CATEGORY_SOURCES:
+        raise ApiError(422, "invalid", "The source filter is not one of the known ways a category is chosen.", "source")
     rows = tools.list_transactions(
-        start, end, category=query(request, "category"), search=search,
+        start, end, category=query(request, "category"), search=search, source=source or None,
         account=int(account) if account and not unlinked else None, unlinked=unlinked, limit=limit + 1)
     return {"items": [wire.txn(t) for t in rows[:limit]], "truncated": len(rows) > limit, "limit": limit}
 

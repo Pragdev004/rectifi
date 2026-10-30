@@ -6,7 +6,7 @@ You tell it what you spent. Or you paste a bank SMS. Or you import a bank statem
 
 It has two ways in:
 
-- the **app** (a web app; the old Streamlit app is still there as `--streamlit`): Overview, Review, Insights, Ask, Add, Ledger, Budgets, Accounts, Phone
+- the **app** (a web app; the old Streamlit app is still there as `--streamlit`): Overview, Review, Insights, Ask (a chat with memory), Add, Ledger, Charts, Budgets, Accounts, Phone, Library, Memory, Traces
 - a **read-only MCP server**, so Claude Desktop can answer questions about your money (it can look, never change)
 
 ## The five rules
@@ -15,7 +15,7 @@ It has two ways in:
 2. **Money is never a float.** It is `Decimal` in Python and `NUMERIC` in Postgres. No rounding crumbs.
 3. **Duplicates are blocked by the database.** Not by app code. Paste the same SMS twice and you get one row.
 4. **Completeness is proven.** `opening balance + credits - debits = closing balance`. If that is off by even one rupee, you see the gap.
-5. **Everything is local.** The data lives in a Postgres on your laptop. Account numbers are masked before anything goes to an AI model.
+5. **Everything is local.** The data lives in a Postgres on your laptop. Account numbers are masked before anything goes to an AI model. With Ollama (the default) nothing leaves the laptop at all.
 
 ## What leaves your laptop
 
@@ -27,6 +27,8 @@ It has two ways in:
 | Any other OpenAI-compatible service (`openai_compat`, for example Groq) | The same, to whoever runs that URL. |
 | DeepSeek (`LLM_PROVIDER=deepseek`) | The same, to DeepSeek. |
 | Claude Desktop with the MCP server | The results of the questions Claude asks go to Anthropic. Same masking. |
+| Library web search (`RECTIFI_WEB_SEARCH=1`, off by default) | Only one generic, rewritten question goes to DuckDuckGo, and only after you press Search on a prompt. Nothing about your money is sent. |
+| LangSmith (`RECTIFI_LANGSMITH=1`, off by default) | Run traces go to LangSmith. Rectifi forces tracing off unless you set this on purpose. |
 | Always | Your statement files (CSV, Excel and PDF), the raw SMS text, and the database stay on your laptop. PDFs and phone SMS are read by fixed rules; no model ever sees them. |
 
 For every cloud model, long account, card and reference numbers are masked before anything is sent. That happens in one place (the agent), so it is the same for every provider. API keys stay in your `.env` and are never printed.
@@ -150,13 +152,27 @@ The Ask page is optional. Everything else works without it. The agent **needs a 
 
 ### Ollama (free, private)
 
-Install it from ollama.com, then:
+Install it from ollama.com, open it once, then let Rectifi pick models for your laptop:
 
 ```
-ollama pull qwen2.5:7b
+python scripts/dev.py ollama-setup --dry-run    # shows what it would download, and the .env lines
+python scripts/dev.py ollama-setup              # downloads them and builds two small tuned models
+python scripts/dev.py llm-check                 # a real round trip: reachable, model found, replied, tool call worked
 ```
 
-Nothing to change in `.env`, Ollama is the default. On a laptop with little RAM use `ollama pull qwen2.5:3b` and set `OLLAMA_MODEL=qwen2.5:3b` (it makes more mistakes with tools). These model families support tools: qwen2.5, qwen3, llama3.1, llama3.2, mistral-nemo.
+`ollama-setup` reads your RAM and picks a set (`--tier small|laptop|large|oracle` to choose by hand):
+
+| RAM | Chat | Sorting imports | Chart code | Grading |
+|---|---|---|---|---|
+| 8 GB or less | llama3.2:3b | qwen2.5:3b | qwen2.5-coder:3b | qwen2.5:3b |
+| 12 to 16 GB (a typical laptop) | qwen2.5:7b | qwen2.5:3b | qwen2.5-coder:7b | qwen2.5:3b |
+| 24 GB or more, or a GPU | qwen3:14b | qwen2.5:7b | qwen2.5-coder:14b | qwen2.5:7b |
+
+It also downloads `nomic-embed-text` (the Library's search model) and creates `rectifi-classify` and `rectifi-chartcoder` from the files in `deploy/` (a Modelfile fixes the temperature and a short system message). It prints the `RECTIFI_MODEL_*` lines for your `.env`; it never edits `.env` for you. Each job has its own model so a small fast one can sort imports while a bigger one chats. Leave a line empty and that job uses the chat model.
+
+These model families support tool calling, which the chat needs: qwen2.5, qwen3, llama3.1, llama3.2, mistral-nemo. `OLLAMA_NUM_CTX` (default 8192) matters: Ollama's own default window is short and silently drops the tool list. If the app says Ollama is not reachable on Windows, put `OLLAMA_BASE_URL=http://127.0.0.1:11434` in `.env`.
+
+**"The API is not responding"** used to be a silent failure. Now `dev.py doctor` makes one real call (use `--quick` to skip it), the Ask page shows a **Model check** card with a *Test the model* button, and every stage says what failed: Ollama not running, model not downloaded, model without tool support, a tool call written as text, or a timeout. Local models are slow on a CPU; the first reply can take a minute while the model loads.
 
 ### OpenRouter free models
 
@@ -211,6 +227,56 @@ Never commit `.env`. It is already in `.gitignore`.
 
 If the model is not ready, the Ask page tells you exactly what to fix and the rest of Rectifi keeps working. Every cloud model uses a 60 second timeout and two retries, and temperature 0.
 
+## Automatic categories
+
+Import a statement and every payment gets a category. Anything Rectifi is not sure about goes to **Miscellaneous** (money in goes to *Other income*). It never guesses quietly.
+
+Five layers run in order, and the first sure one wins: (1) a category you chose yourself, (2) a rule you taught by changing a category, (3) built-in merchant rules (Swiggy is Food & Dining), (4) words in the narration (ATM, salary, rent), (5) a look-alike of a payment you sorted before. Layers 1 to 4 are plain code. Only if something is still unsure, after the import has already finished, the **local model** is asked, and only about those rows. It can only pick a category of the right kind. At 80% or more sure it is stored; between 50% and 80% it is shown as a suggestion you can accept; below that the row stays in Miscellaneous.
+
+It never changes an amount, a date, a direction or an account, and it never overrides a category you chose. Each row shows a stamp saying how it was sorted (*You*, *Rule*, *Model 85%*, *Not sure*). The Ledger can filter by that ("Sorted by"). *Cash Withdrawal* counts as spending on purpose. Without Ollama the import still works; the rows just wait in Miscellaneous. `python scripts/dev.py classify` sorts them later, and `python scripts/dev.py eval classify` measures the fixed layers on a labelled file (83% right on the first pass, with 30% going to Miscellaneous; that number is for the sample file, not your statements).
+
+## Charts
+
+The **Charts** page: describe a chart in words ("food spending by month, last 3 months") and the local model writes Python (matplotlib, seaborn, pandas, numpy) to draw it. Because a model wrote that code, it runs inside a harness:
+
+1. **Validate.** The code is read, not run, against an allow-list. No files, network, `import os`, `eval`, or typed-in rupee amounts.
+2. **Sandbox.** It runs in a separate process with no database address and no secrets, limited CPU time, memory and wall-clock time.
+3. **Check.** Any rupee figure written on the chart must match something Rectifi can trace: a plotted value, a sum of the plotted values, or a total worked out by Rectifi's own code. A made-up title like "Total ₹99,999" fails.
+4. **Repair.** If any step fails, the model sees the reason and tries again, at most 3 times.
+
+You can tick *Let me read the code first*; it pauses before running. A chart you keep is saved with its code; **Draw again** re-runs the saved code on your latest entries with no model at all. Charts come out in light and dark. Honest limits: a sandbox in Python is a harness against a confused model, not a wall against a determined attacker (details in CLAUDE.md rule 15); the Windows version of the limits has never run on Windows; Plotly is not built; a 3B model writes plain bar and line charts well and anything fancy badly.
+
+## The Library: CRAG and Self-RAG
+
+The **Library** page holds what the chat can look things up in: 12 short guides that ship with Rectifi (budgeting, UPI safety, SIPs, tax basics and so on; they contain no rupee figures), notes you add (`.md` or `.txt` files only; a bank statement is refused), your own payment notes, and your entries. Searching uses a local embedding model (`nomic-embed-text`) and stores vectors in ordinary Postgres, with no extension to install. The index refreshes when the app starts and after an import.
+
+When you ask a general question the answer goes through a graph with two safety ideas:
+
+- **CRAG (corrective RAG).** Each retrieved passage is graded as relevant or not. If they are mostly wrong the question is rewritten and searched again (at most twice); if they are mixed, the passages are trimmed to the sentences that matter. Optionally, with your permission each time, one generic web search.
+- **Self-RAG.** After the answer is written, it is checked: is every claim supported by the passages, and does it actually answer the question? An unsupported answer is rewritten (at most twice) and then it either improves or says it is unsure.
+
+The answer shows numbered sources (GUIDE, YOUR NOTE, YOUR ENTRY) and a **How this answer was checked** list. Pick the style in the chat: Auto, Plain, CRAG, Self-RAG or Full. **Honest limit: Self-RAG here is prompt-based: a normal small model answers short structured questions. It is not the fine-tuned reflection-token model of the paper, and its checks can be wrong. The check on rupee amounts is plain code.** A ₹ figure in an answer that is not in your typed words, your records or a cited entry is withheld. `python scripts/dev.py eval rag --live` compares the four styles on 30 questions using your own models.
+
+## Chat, memory and traces
+
+**Ask** is a chat window: a list of past conversations, search, rename, delete, and answers that stream in word by word. It routes each message to the right helper: the spending agent (log or look up your money), the Library, or the chart harness. Type `/chart`, `/lookup` or `/do` to choose one. *Stop* ends an answer where it is, *Answer again* tries again and keeps the earlier answer one arrow away. Conversations are saved in Postgres (a LangGraph checkpointer), so they survive a restart and can be reopened with full history. When the assistant is off you can still read old conversations.
+
+**Memory** holds short notes Rectifi may use in later chats ("I prefer short answers"). It only saves what you approve (it asks first), amounts are removed from it, and it can never supply a number. You can edit or forget any of it. **Traces** lists every chat turn with its route, time and steps, so you can see what ran and where it was slow; it stays on your laptop unless you turn LangSmith on yourself.
+
+## Put it online for free
+
+Optional. Rectifi can run on a free always-on server (Oracle Cloud Always Free, with Tailscale for access) behind a password. The full beginner guide, including backups, is `docs/HOSTING.md`. In short: `python scripts/dev.py set-password` makes the login settings, `python scripts/dev.py deploy-check` checks your files, and `docker compose` starts the app, Postgres and Ollama. Nothing is open to the internet by default. Running only on your laptop needs none of this.
+
+## Honest limits
+
+- **Local models are small.** A 3B or 7B model sorts and chats reasonably and still makes mistakes. That is why numbers never come from the model and every figure is checked by code. Speed on a CPU: expect tens of seconds per answer.
+- **Real Ollama quality and speed were not measured here.** Everything was tested with scripted fake models. Run `dev.py llm-check` and `dev.py eval ... --live` on your laptop before trusting any accuracy figure.
+- **The classifier's score** comes from a labelled sample file, not from real bank statements.
+- **The chart sandbox** is a harness, not a security boundary (see above), and its Windows limits have never run on Windows.
+- **Hosting** was written and checked as files; no server was started. The free server can be taken back by Oracle if it looks idle. See `docs/HOSTING.md`, "Honest limits".
+- **Memory and the Library use plain text search plus local embeddings**; the quality depends on your embedding model.
+- The full list of what was and was not run is in `PROGRESS.md`, under "Not verified".
+
 ## Run it
 
 ```
@@ -226,7 +292,7 @@ python scripts/dev.py up
 
 Rectifi's screen is a web app (React, built once and committed in `web/dist/`), served together with its small JSON API from one Python server on http://localhost:8501. **Running it needs only Python and Postgres.** There is nothing to install for the screen and no Node.
 
-It has ten pages: Overview, Review, Insights, Ask, Add, Ledger, Budgets, Accounts and Phone. On a phone it has a bottom bar (Home, Ledger, Add, Ask, More); on a laptop a sidebar. Light and dark follow your device, with a switch in the sidebar (or under More).
+It has fourteen pages: Overview, Review, Insights, Ask, Add, Ledger, Charts, Budgets, Accounts, Phone, Library, Memory, Traces (and Sign in when a password is set). On a phone it has a bottom bar (Home, Ledger, Add, Ask, More); on a laptop a sidebar. Light and dark follow your device, with a switch in the sidebar (or under More).
 
 It only shows what Rectifi's Python code worked out. Money crosses the API as text like `"1250.50"` and the browser only formats it. The same rules apply as before: amounts the assistant saves must be ones you typed, every number is worked out by `rectifi/tools.py`, and Postgres is the final guard against double entries.
 
@@ -518,7 +584,7 @@ No API key and no Ollama are needed. The agent tests use a scripted fake model.
 | Ask page: model does not support tools | Pick another model. For OpenRouter run `python scripts/dev.py free-models`. |
 | `dev.py db` fails | Open Docker Desktop and wait for it to say "running". `docker compose logs db` shows why. |
 | Port 5432 is already in use | You have another Postgres running. Stop it, or use it (Path B). |
-| Ask page says the assistant is off | Read the message. Ollama not running, model not pulled (`ollama pull qwen2.5:7b`), or a missing key or model for the cloud provider you chose. |
+| Ask page says the assistant is off | Press *Test the model* on the Model check card: it names the step that failed. Or read the message. Ollama not running, model not pulled (`ollama pull qwen2.5:7b`), or a missing key or model for the cloud provider you chose. |
 | `python` not found (Windows) | Use `py -3.13` instead of `python`. |
 | `python3` is the wrong version (macOS) | `brew install python@3.13`, then `python3.13 scripts/dev.py setup`. |
 | Tests say "Can't reach the test database" | `python scripts/dev.py db`, or run `db/init.sql` once on your own Postgres. |
@@ -550,6 +616,10 @@ app/
 rectifi/
   api/               the web app's server: a thin Starlette layer over tools.py, plus the guards (Host, CSRF header, body size)
   tools.py           the one place that does money maths (SQL + Decimal)
+  categorize.py      the fixed layers of the category sorter (rules, words, look-alikes; no AI)
+  charts/            the chart harness: validate, sandbox, checks, repair loop
+  rag/               the Library: loaders, index, retrievers, the CRAG + Self-RAG graph
+  evals/             `python -m rectifi.evals classify|charts|rag`
   importer.py        CSV/Excel/PDF statement import (auto-import check, import batches)
   insights.py        the Insights rules (fixed rules, no AI)
   tailscale.py       builds the Tailscale Serve commands and reads its status (standard library only)
@@ -564,10 +634,14 @@ rectifi/
     graph.py         the LangGraph agent and its amount guard
     explain.py       optional "Explain this" for an insight, with a check on every figure
     tools.py         what the agent is allowed to call
-    llm.py           picks the model: Ollama, DeepSeek, OpenRouter, Hugging Face or any OpenAI-compatible service
+    llm.py           picks the model per job: Ollama, DeepSeek, OpenRouter, Hugging Face or any OpenAI-compatible service; checks it with a real call
+    classify.py, jobs.py   the model pass that sorts imports, and the one background worker
+    supervisor.py    the chat graph; memory.py, checkpoint.py, tracing.py hold memory, saved conversations and traces
+deploy/              Dockerfile, compose, cloud-init and Modelfiles for the free server and for tuned Ollama models (docs/HOSTING.md)
+docs/CONCEPTS.md     which LangChain / LangGraph idea is used where, with the test that proves it
 db/init.sql          creates the login and the three databases
 scripts/
-  dev.py             setup, db, doctor, app, up, build-web, web, phone, tailscale, demo, free-models, test, mcp-config
+  dev.py             setup, db, doctor, app, up, build-web, web, phone, tailscale, demo, free-models, test, mcp-config, ollama-setup, llm-check, classify, eval, set-password, deploy-check
   setup_windows.ps1  one-command Windows setup for an existing PostgreSQL
   seed_demo.py       fake data (only into a database ending in _demo)
 tests/               pytest, against a real Postgres. tests/fixtures has fake statements, including PDFs

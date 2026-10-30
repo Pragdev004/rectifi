@@ -153,12 +153,26 @@ def _read_file(path: Path, limit: int) -> bytes:
 
 # ───────────────────────── launching ─────────────────────────
 
-def child_env(job_dir: str) -> dict:
+def usable_cache_dir() -> Path:
+    """Where matplotlib keeps its font cache. Normally ~/.rectifi/mplcache (or RECTIFI_HOME). In the Docker image the root file
+    system is read-only and only /tmp is writable, so when that folder cannot be made we fall back to a folder in the temp dir."""
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        if os.access(CACHE_DIR, os.W_OK):
+            return CACHE_DIR
+    except OSError:
+        pass
+    fallback = Path(tempfile.gettempdir()) / "rectifi-mplcache"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def child_env(job_dir: str, cache_dir: Path | None = None) -> dict:
     """Only these variables reach the child. No DATABASE_URL, no API keys, no proxies."""
     env = {
         "PATH": os.environ.get("PATH", ""),
         "TEMP": job_dir, "TMP": job_dir, "TMPDIR": job_dir,
-        "MPLBACKEND": "Agg", "MPLCONFIGDIR": str(CACHE_DIR),
+        "MPLBACKEND": "Agg", "MPLCONFIGDIR": str(cache_dir or CACHE_DIR),
         "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
         "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
     }
@@ -190,7 +204,7 @@ def run_chart(code: str, frame: dict, *, period: str = "", timeout: float | None
     timeout and memory_mb default to config.CHART_TIMEOUT and config.CHART_MEMORY_MB."""
     timeout = float(timeout if timeout is not None else config.CHART_TIMEOUT)
     memory_mb = int(memory_mb if memory_mb is not None else config.CHART_MEMORY_MB)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_dir = usable_cache_dir()
     job_dir = tempfile.mkdtemp(prefix="rectifi-chart-")
     started = time.monotonic()
     winjob = None
@@ -200,7 +214,7 @@ def run_chart(code: str, frame: dict, *, period: str = "", timeout: float | None
         (job / "data.json").write_text(json.dumps(frame, ensure_ascii=False), encoding="utf-8")
         meta = {
             "period": str(period)[:80], "memory_bytes": (memory_mb + AS_OVERHEAD_MB) * 1024 * 1024, "cpu_seconds": int(timeout) + 5,
-            "money_path": str(MONEY), "winjob_path": str(WINJOB), "cache_dir": str(CACHE_DIR), "font_dir": str(theme_module.FONT_DIR),
+            "money_path": str(MONEY), "winjob_path": str(WINJOB), "cache_dir": str(cache_dir), "font_dir": str(theme_module.FONT_DIR),
             "font_files": [str(theme_module.FONT_DIR / n) for n in theme_module.FONT_FILES],
             "themes": {t: {"rc": theme_module.rc_params(t), "palette": theme_module.palette(t)} for t in themes},
         }
@@ -213,7 +227,7 @@ def run_chart(code: str, frame: dict, *, period: str = "", timeout: float | None
             kwargs["start_new_session"] = True
         with open(log_path, "wb") as log:
             proc = subprocess.Popen([sys.executable, "-I", str(CHILD), job_dir], cwd=job_dir, stdin=subprocess.PIPE,
-                                    stdout=log, stderr=subprocess.STDOUT, env=child_env(job_dir), **kwargs)
+                                    stdout=log, stderr=subprocess.STDOUT, env=child_env(job_dir, cache_dir), **kwargs)
             if os.name == "nt":
                 from . import _winjob
                 winjob = _winjob.ParentJob()

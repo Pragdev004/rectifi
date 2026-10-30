@@ -128,7 +128,10 @@ def build_chart_subgraph(*, llm, checkpointer=None):
 
     def review_gate(state: ChartState) -> Command[Literal["validate", "execute", "give_up"]]:
         _emit("review", "waiting", "Waiting for you to read the code.", state["attempts"])
-        answer = interrupt({"kind": "review_code", "code": state["code"], "attempt": state["attempts"]}) or {}
+        answer = interrupt({"kind": "review_code", "code": state["code"], "attempt": state["attempts"]})
+        if isinstance(answer, bool):                # the chat window answers yes / no; the Charts page sends {"run": true, "code": "..."}
+            answer = {"run": answer}
+        answer = answer if isinstance(answer, dict) else {}
         if not answer.get("run"):
             row = _emit("review", "CANCELLED", "You chose not to run the code.", state["attempts"])
             return Command(goto="give_up", update={"trace": [row], "error": "You cancelled before the code ran.", "stage": "cancelled"})

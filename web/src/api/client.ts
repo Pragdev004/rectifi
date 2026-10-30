@@ -81,7 +81,11 @@ export async function request<T>(method: string, path: string, options: RequestO
     throw new NetworkError();
   }
   setOffline(false);
-  if (!res.ok) throw await toError(res);
+  if (!res.ok) {
+    const err = await toError(res);
+    if (err.code === "auth_required") window.dispatchEvent(new Event("rectifi:auth-required")); // api/auth.ts sends the person to /login
+    throw err;
+  }
   return (await res.json()) as T;
 }
 

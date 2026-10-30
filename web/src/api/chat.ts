@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { del, get, patch, post, qs } from "./client";
 import { streamNdjson } from "./ndjson";
+import type { Citation, TraceEvent } from "./knowledge";
 import type { AskStatus, Money } from "./types";
 
 export type RouteName = "agent" | "knowledge" | "chart" | "smalltalk" | "remember";
-export type AnswerStyle = "auto" | "plain" | "crag" | "self_rag" | "full";
+export type AnswerStyle = "auto" | "rag" | "crag" | "self_rag" | "full";
 export type Chip = "" | "agent" | "knowledge" | "chart";
 
 export interface Thread {
@@ -15,17 +16,7 @@ export interface Thread {
   updated_at: string;
 }
 
-export interface TraceEvent {
-  step: string;
-  verdict: string;
-  detail: string;
-}
-export interface Citation {
-  source: string;
-  title: string;
-  chunk?: number;
-  quote?: string;
-}
+export type { Citation, TraceEvent } from "./knowledge";
 export interface ToolStep {
   tool: string;
   output: string;
@@ -48,6 +39,7 @@ export type ChatItem =
       artifact: { chart_id: number } | null;
       support: string | null;
       useful: boolean | null;
+      abstained: boolean;
       stopped: boolean;
     };
 

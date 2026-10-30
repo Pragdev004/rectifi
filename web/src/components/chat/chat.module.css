@@ -112,7 +112,7 @@
 .send { min-width: 44px; padding-left: var(--s-3); padding-right: var(--s-3); }
 .options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
 .chip {
-  min-height: 44px; padding: 0 var(--s-3); display: inline-flex; align-items: center; gap: var(--s-1); font: inherit; font-size: var(--t-sm);
+  min-height: 44px; min-width: 44px; justify-content: center; padding: 0 var(--s-3); display: inline-flex; align-items: center; gap: var(--s-1); font: inherit; font-size: var(--t-sm);
   color: var(--c-text); background: transparent; border: 1px solid var(--c-rule-strong); border-radius: var(--r-3); cursor: pointer;
 }
 .chip[aria-pressed="true"] { background: var(--c-accent-tint); border-color: var(--c-accent); color: var(--c-accent); font-weight: 600; }
@@ -126,3 +126,5 @@
   .md, .user { animation: rise var(--d-base) var(--ease-out) 1; }
   @keyframes rise { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
 }
+
+.modelCheck { margin-bottom: var(--s-4); }

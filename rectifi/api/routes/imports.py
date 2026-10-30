@@ -136,6 +136,12 @@ def start_sorting(batch_id: int) -> None:
         jobs.queue_for_batch(batch_id)
     except Exception:                                          # noqa: BLE001
         pass
+    try:
+        from . import knowledge                                # new payments should be findable by the chat (one worker, a thread)
+
+        knowledge.auto_reindex(("txn",))
+    except Exception:                                          # noqa: BLE001
+        pass
 
 
 def finish_import(rows, account_id: int, filename: str, digest: str, how: str, problems: list[str]) -> dict:

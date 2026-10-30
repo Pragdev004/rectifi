@@ -132,7 +132,7 @@ export default function LibraryPage() {
               const guides = all.filter((d) => d.builtin);
               const mine = all.filter((d) => !d.builtin);
               return (
-                <>
+                <div className={styles.col}>
                   <section className={styles.section} aria-labelledby="guides-h">
                     <h2 id="guides-h" className={styles.heading}>Guides</h2>
                     {guides.length === 0 ? (
@@ -150,7 +150,7 @@ export default function LibraryPage() {
                     )}
                     <AddFile />
                   </section>
-                </>
+                </div>
               );
             }}
           </Loaded>

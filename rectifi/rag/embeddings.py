@@ -7,7 +7,6 @@ evals (`python -m rectifi.evals.rag --live`) are the way to decide. The default 
 
 from __future__ import annotations
 
-import os
 
 from langchain_core.embeddings import Embeddings
 
@@ -16,7 +15,9 @@ QUERY_PREFIX = "search_query: "
 
 
 def prefixes_enabled() -> bool:
-    return os.getenv("RECTIFI_EMBED_PREFIXES", "1").strip().lower() not in ("0", "false", "off", "no")
+    from .. import config
+
+    return config.embed_prefixes()
 
 
 class PrefixedEmbeddings(Embeddings):

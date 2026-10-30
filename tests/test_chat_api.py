@@ -8,12 +8,18 @@ from api_support import make_client
 from chat_support import ndjson
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
-from support.chat_fakes import fake_chart, fake_rag
-from support.fakes import ScriptedModel, ScriptedStructured
+from charts_support import GOOD, reply as chart_reply, seed_spending
+from rag_support import RuleModel
+from support.fakes import BowEmbeddings, ScriptedModel, ScriptedStructured
 from test_agent import call
 
-from rectifi import tools
+from rectifi import config, tools
 from rectifi.api import ask
+from rectifi.charts import graph as chart_graph
+from rectifi.charts import sandbox
+from rectifi.rag import index, web
+
+RAG_ANSWER = "Keep three to six months of basic expenses [1]."
 
 
 class Streaming(ScriptedModel):
@@ -37,19 +43,41 @@ class Streaming(ScriptedModel):
                 self.after(self.words_sent)
 
 
+def rag_grader(doc="yes"):
+    """Scripted answers for the REAL knowledge graph's grader / router model."""
+    return RuleModel(
+        structured={"DocGrade": lambda t: {"relevance": doc, "reason": "x"},
+                    "GroundCheck": lambda t: {"supported": "fully", "unsupported_claims": []},
+                    "UseCheck": lambda t: {"useful": True, "score": 5},
+                    "RouteDecision": lambda t: {"route": "knowledge", "reason": "a guide question"},
+                    "QueryList": lambda t: {"queries": ["emergency fund months"]}},
+        write=lambda t: "emergency fund size in months")
+
+
 @pytest.fixture(autouse=True)
-def setup(monkeypatch):
+def setup(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.setenv("RECTIFI_TRACE_ROWS", "20000")
     holder = {"agent": ScriptedModel(script=[]), "chat": ScriptedModel(script=[]), "grade": ScriptedStructured()}
     monkeypatch.setattr("rectifi.agent.llm.get_llm", lambda role="chat": holder.get(role) or holder["chat"])
     monkeypatch.setattr("rectifi.agent.graph.get_llm", lambda role="chat": holder["agent"])
-    monkeypatch.setattr("rectifi.agent.contracts.build_rag_subgraph", lambda **k: fake_rag())
-    monkeypatch.setattr("rectifi.agent.contracts.build_chart_subgraph", lambda **k: fake_chart(5))
+    # The REAL knowledge and chart subgraphs (built through agent.contracts); only models and embeddings are scripted.
+    monkeypatch.setenv("RECTIFI_EMBED_MODEL", "bow")
+    embeddings = BowEmbeddings()
+    index.reindex(embeddings, embed_model=config.embed_model())
+    monkeypatch.setattr("rectifi.agent.llm.get_embeddings", lambda: embeddings)
+    monkeypatch.setattr(sandbox, "CACHE_DIR", tmp_path / "mpl")
+    monkeypatch.setattr(chart_graph, "RETRY_INTERVAL", 0)
+    holder["code"] = ScriptedModel(script=[chart_reply(GOOD)])
     ask.reset()
     yield holder
     ask.reset()
+
+
+@pytest.fixture
+def seeded(setup):
+    seed_spending()
 
 
 @pytest.fixture
@@ -111,19 +139,27 @@ def test_only_final_nodes_stream_tokens_not_the_router_or_graders(client, models
     assert "".join(e["text"] for e in events if e["type"] == "token").strip() == "Glad to help."
 
 
-def test_knowledge_answers_carry_sources_and_the_check_trace(client):
+def test_knowledge_answers_carry_sources_and_the_check_trace(client, models):
+    models["grade"] = rag_grader()
+    models["chat"] = Streaming(script=[AIMessage(RAG_ANSWER)])
     tid = new_thread(client)
-    done = ndjson(send(client, tid, "what is a rainy day fund?"))[-1]
-    reply = done["items"][-1]
-    assert reply["route"] == "knowledge" and reply["citations"][0]["title"] == "Budgeting"
-    assert [t["step"] for t in reply["trace"]] == ["retrieve", "generate"] and reply["support"] == "full"
+    events = ndjson(send(client, tid, "what is an emergency fund, and how many months should it cover?", mode="full"))
+    assert events[-1]["type"] == "done", events[-1]
+    reply = events[-1]["items"][-1]
+    assert reply["route"] == "knowledge" and reply["text"] == RAG_ANSWER and reply["abstained"] is False
+    cite = reply["citations"][0]
+    assert cite["n"] == 1 and cite["label"] == "GUIDE" and cite["corpus"] == "guide" and cite["source"].startswith("guides/")
+    steps = [t["step"] for t in reply["trace"]]
+    assert "SUPPORTED" in steps and "USEFUL" in steps and reply["support"] == "full" and reply["useful"] is True
     assert [c["step"] for c in reply["checks"]][-1] == "amounts"
+    streamed = "".join(e["text"] for e in events if e["type"] == "token")          # the answer streams from the RAG "generate" node only
+    assert streamed.strip() == RAG_ANSWER
 
 
-def test_chart_answers_point_at_the_saved_chart(client):
+def test_chart_answers_point_at_the_saved_chart(client, seeded):
     tid = new_thread(client)
     reply = ndjson(send(client, tid, "/chart food by month"))[-1]["items"][-1]
-    assert reply["route"] == "chart" and reply["artifact"] == {"chart_id": 5}
+    assert reply["route"] == "chart" and reply["artifact"]["chart_id"] and tools.get_chart(reply["artifact"]["chart_id"])["title"]
 
 
 def test_an_invented_figure_is_flagged(client, models):
@@ -170,14 +206,30 @@ def test_remember_pauses_with_a_question_and_resume_saves(client):
     assert client.post(f"/api/chat/threads/{tid}/resume", json={"value": True}).status_code == 409
 
 
-def test_web_consent_style_interrupts_come_from_the_subgraphs(client, monkeypatch):
-    monkeypatch.setattr("rectifi.agent.contracts.build_rag_subgraph", lambda **k: fake_rag(ask_web=True))
-    ask.reset()
+def test_the_web_question_from_the_real_rag_graph_reaches_the_window_as_web_consent(client, models, monkeypatch):
+    sent = []
+    monkeypatch.setattr(web, "available", lambda: True)
+    monkeypatch.setattr(web, "search", lambda q: sent.append(q) or [])
+    models["grade"] = rag_grader(doc="no")
+    models["chat"] = Streaming(script=[AIMessage(RAG_ANSWER)])
     tid = new_thread(client)
-    events = ndjson(send(client, tid, "what is an SIP?"))
-    assert next(e for e in events if e["type"] == "interrupt")["kind"] == "web_consent"
+    events = ndjson(send(client, tid, "how does a SIP work?", mode="crag"))
+    pause = next(e for e in events if e["type"] == "interrupt")
+    assert pause["kind"] == "web_consent" and pause["payload"]["type"] == "web_search" and pause["payload"]["query"]
+    reopened = client.get(f"/api/chat/threads/{tid}").json()
+    assert reopened["pending_interrupt"]["kind"] == "web_consent"
     done = ndjson(client.post(f"/api/chat/threads/{tid}/resume", json={"value": False}))[-1]
-    assert done["items"][-1]["text"].startswith("I answered without the web")
+    assert sent == [] and done["pending_interrupt"] is None
+    assert done["items"][-1]["route"] == "knowledge" and any(t["step"] == "WEB" and t["verdict"] == "declined" for t in done["items"][-1]["trace"])
+
+
+def test_the_chart_code_review_pause_resumes_with_a_plain_yes(client, seeded):
+    tid = new_thread(client)
+    events = ndjson(send(client, tid, "/chart food by month", review=True))
+    pause = next(e for e in events if e["type"] == "interrupt")
+    assert pause["kind"] == "review_code" and "plt." in pause["payload"]["code"]
+    done = ndjson(client.post(f"/api/chat/threads/{tid}/resume", json={"value": True}))[-1]
+    assert done["items"][-1]["artifact"]["chart_id"] and done["pending_interrupt"] is None
 
 
 def test_stop_ends_the_answer_at_the_next_token_and_keeps_what_was_said(client, models):
