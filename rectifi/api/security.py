@@ -233,4 +233,54 @@ class BodyLimit:
 
 # ═══ WS-HOST: begin ═══
 # SessionLock (the login for public mode), the chart-frame CSP route and any other new guard go here. WS-HOST only.
+from starlette.concurrency import run_in_threadpool  # noqa: E402
+from starlette.middleware import Middleware  # noqa: E402
+
+from . import auth as _auth  # noqa: E402
+from .errors import DB_DOWN_HINT, DB_ERRORS  # noqa: E402
+
+# Open without a session: the health check, and the three calls the login page itself makes. Everything else under /api
+# (including /api/auth/logout-all) needs a session. Static files and the page shell hold no data and stay public.
+SESSION_EXEMPT = frozenset({"/api/health", "/api/auth/status", "/api/auth/login", "/api/auth/logout"})
+
+
+class SessionLock:
+    """When a password is set (or the app is public), /api needs a valid rectifi_session cookie, else 401 auth_required.
+
+    Sits right after HostGuard and before ApiGuard. OPTIONS passes through so ApiGuard can answer 403 as always. If the
+    login is switched on but not set up, every guarded call is refused (503): it fails closed, never open."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope["path"] if scope["type"] == "http" else ""
+        if (scope["type"] != "http" or not _is_api(path) or path in SESSION_EXEMPT or scope["method"] == "OPTIONS"
+                or not _auth.login_required()):
+            return await self.app(scope, receive, send)
+        if _auth.startup_problem():
+            response = JSONResponse(error_body("auth_misconfigured", _auth.MESSAGES["auth_misconfigured"]), status_code=503)
+            return await response(scope, receive, send)
+        try:
+            ok = await run_in_threadpool(_auth.session_valid, Headers(scope=scope).get("cookie"))
+        except DB_ERRORS:
+            response = JSONResponse(error_body("db_unavailable", f"Rectifi can't reach its database. {DB_DOWN_HINT}"),
+                                    status_code=503, headers={"Retry-After": "10"})
+            return await response(scope, receive, send)
+        if not ok:
+            response = JSONResponse(error_body("auth_required", _auth.MESSAGES["auth_required"]), status_code=401)
+            return await response(scope, receive, send)
+        await self.app(scope, receive, send)
+
+
+def install_session_lock(app) -> None:
+    """Call once in create_app, right after the Starlette object is built. Refuses to start (StartupRefused) when the app is
+    public, or a password hash is set, without a usable hash and session secret. Then adds SessionLock after HostGuard."""
+    _auth.check_startup()
+    if any(m.cls is SessionLock for m in app.user_middleware):
+        return                                          # already installed (safe to call twice)
+    if app.middleware_stack is not None:
+        raise RuntimeError("install_session_lock must run before the first request.")
+    at = next(i for i, m in enumerate(app.user_middleware) if m.cls is HostGuard)
+    app.user_middleware.insert(at + 1, Middleware(SessionLock))
 # ═══ WS-HOST: end ═══

@@ -1,0 +1,120 @@
+# Rectifi on a small always-on server (Oracle Cloud Always Free, Arm). Read docs/HOSTING.md first.
+#
+#   cp .env.deploy.example .env.deploy        # then fill it in; `python scripts/dev.py deploy-check` checks it
+#   docker compose --env-file .env.deploy -f deploy/compose.oracle.yml up -d --build
+#
+# Nothing here listens on the internet. The app port is published on 127.0.0.1 only; Tailscale (installed on the server
+# itself) forwards to it. The database and the model server have no published ports at all.
+name: rectifi
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rectifi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.deploy}
+      POSTGRES_DB: rectifi
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rectifi -d rectifi"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *logging
+
+  ollama:
+    image: ollama/ollama:${OLLAMA_VERSION:-0.12.11}
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: "-1"            # keep the model in memory: no slow reload, and the VM does not look idle
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+    volumes:
+      - ollama:/root/.ollama
+    mem_limit: 8g
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    logging: *logging
+
+  ollama-pull:
+    # One-shot: downloads the models into the ollama volume, then stops. Safe to run again (it skips what it has).
+    image: ollama/ollama:${OLLAMA_VERSION:-0.12.11}
+    restart: "no"
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - ollama pull qwen2.5:3b && ollama pull qwen2.5-coder:3b && ollama pull nomic-embed-text
+    depends_on:
+      ollama:
+        condition: service_healthy
+    logging: *logging
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file: ../.env.deploy
+    environment:
+      DATABASE_URL: postgresql://rectifi:${POSTGRES_PASSWORD}@db:5432/rectifi
+      LLM_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${RECTIFI_MODEL_CHAT:-qwen2.5:3b}
+      RECTIFI_MODEL_CHAT: ${RECTIFI_MODEL_CHAT:-qwen2.5:3b}
+      RECTIFI_MODEL_CLASSIFY: ${RECTIFI_MODEL_CLASSIFY:-qwen2.5:3b}
+      RECTIFI_MODEL_CODE: ${RECTIFI_MODEL_CODE:-qwen2.5-coder:3b}
+      RECTIFI_MODEL_GRADE: ${RECTIFI_MODEL_GRADE:-qwen2.5:3b}
+      RECTIFI_EMBED_MODEL: ${RECTIFI_EMBED_MODEL:-nomic-embed-text}
+      # The Host header must be on this list. 127.0.0.1 is for the container's own health check.
+      RECTIFI_ALLOWED_HOSTS: ${RECTIFI_HOSTNAME:?set RECTIFI_HOSTNAME in .env.deploy},localhost,127.0.0.1
+      RECTIFI_ALLOWED_ORIGINS: https://${RECTIFI_HOSTNAME}
+    ports:
+      - "127.0.0.1:8501:8501"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 2g
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *logging
+
+  backup:
+    # A copy of the database every day, kept for 7 days, in ${BACKUP_DIR} on the server. Restore steps: docs/HOSTING.md.
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ${BACKUP_DIR:-/var/backups/rectifi}:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          f=/backups/rectifi-$$(date +%F).dump
+          if pg_dump -h db -U rectifi -Fc rectifi > "$$f.tmp"; then mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; echo "backup failed"; fi
+          ls -1t /backups/rectifi-*.dump 2>/dev/null | tail -n +8 | xargs -r rm -f
+          sleep 86400
+        done
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *logging
+
+volumes:
+  pgdata:
+  ollama:

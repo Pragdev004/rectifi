@@ -1,0 +1,62 @@
+/* The sign-in page: a passbook-style slip on ruled paper. Tokens only. */
+.screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  padding: var(--s-7) var(--s-4) calc(var(--s-7) + env(safe-area-inset-bottom));
+  background-color: var(--c-bg);
+  background-image: repeating-linear-gradient(to bottom, transparent 0 31px, color-mix(in srgb, var(--c-rule) 45%, transparent) 31px 32px);
+}
+.inner { width: 100%; max-width: 24rem; display: grid; gap: var(--s-6); margin-top: clamp(0px, 8vh, var(--s-8)); }
+.brand { display: grid; gap: var(--s-1); }
+.wordmark { font-family: var(--font-display); font-weight: 600; font-size: var(--t-2xl); line-height: var(--t-2xl-lh); letter-spacing: -0.01em; color: var(--c-text); }
+.tagline { color: var(--c-muted); font-size: var(--t-md); line-height: var(--t-md-lh); }
+
+.slip {
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--s-5) var(--s-5) var(--s-5);
+  background: var(--c-raised);
+  border: 1px solid var(--c-rule);
+  border-top: 2px dashed var(--c-rule-strong); /* the tear-off edge of a passbook slip */
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow-overlay);
+  animation: arrive var(--d-slow) var(--ease-out) both;
+}
+.slip h1 { font-size: var(--t-xl); line-height: var(--t-xl-lh); }
+.form { display: grid; gap: var(--s-4); }
+
+.pw { position: relative; }
+.pw .pwInput { padding-right: 3.25rem; }
+.reveal {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  background: none;
+  border: 0;
+  border-radius: var(--r-2);
+  color: var(--c-muted);
+  cursor: pointer;
+}
+.reveal:hover { color: var(--c-text); }
+.reveal:focus-visible { outline: 2px solid var(--c-accent); outline-offset: -2px; }
+
+.help { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); }
+.help code { font-family: var(--font-figures); font-size: 0.9em; overflow-wrap: anywhere; }
+.status { color: var(--c-muted); }
+
+@keyframes arrive {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .slip { animation: none; }
+}
