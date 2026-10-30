@@ -57,6 +57,7 @@ def txn(t: dict) -> dict:
         "id": t["id"], "date": t["txn_date"], "amount": t["amount"], "direction": t["direction"], "payee": t["payee"],
         "description": t["description"], "note": t["note"], "source": t["source"], "account_id": t["account_id"],
         "account": t["account"], "category_id": t["category_id"], "category": t["category"], "category_kind": t["category_kind"],
+        **classify_fields(t),
     }
 
 
@@ -161,7 +162,27 @@ def review(r: dict) -> dict:
 # ───────────────────────── next phase: one block per workstream ─────────────────────────
 
 # ═══ WS-CLASSIFY: begin ═══
-# wire shapes for classification: txn category_source / confidence / suggestion, classify job status.
+# Percent fields are plain ints (to_wire would turn a Decimal into a money string). Rows from before this feature have source None.
+
+def classify_fields(t: dict) -> dict:
+    """How a transaction got its category. `.get` so a dict from an older query still works."""
+    return {
+        "category_source": t.get("category_source"), "category_confidence": t.get("category_confidence"),
+        "category_reason": t.get("category_reason"), "suggested_category": t.get("suggested_category"),
+        "suggested_confidence": t.get("suggested_confidence"),
+    }
+
+
+def classify_job(job: dict) -> dict:
+    return {
+        "id": job["id"], "batch_id": job["batch_id"], "status": job["status"], "total": job["total"], "done": job["done"],
+        "by_source": job["by_source"] or {}, "model": job["model"], "error": job["error"],
+        "finished": job["finished_at"] is not None,
+    }
+
+
+def batch_summary(counts: dict) -> dict:
+    return {"total": counts["total"], "by_source": counts["by_source"], "miscellaneous": counts["miscellaneous"]}
 # ═══ WS-CLASSIFY: end ═══
 
 # ═══ WS-CHARTS: begin ═══

@@ -22,11 +22,12 @@ from decimal import Decimal
 
 import pandas as pd
 
+from . import categorize
 from .db import connect
 from .money import parse_amount
 from .parsing import narration_details
 from .pdf_statement import NO_ROWS_MESSAGE, PdfContent, describe_review, join_wrapped, read_pdf, table_from_text
-from .tools import RectifiError, _account_id, _categorize, resolve_date
+from .tools import RectifiError, _account_id, _categorize_detail, _suggestion_id, resolve_date
 
 ROLES = ["date", "narration", "debit", "credit", "amount", "type", "balance", "ref"]
 
@@ -472,6 +473,7 @@ def import_rows(rows: list[StatementRow], account: str | int, filename: str | No
         ).fetchone()["id"]
         result.batch_id = batch_id
         occurrences: dict[str, int] = {}
+        ctx = categorize.load_context(conn)          # rules, accounts and the look-alike index, loaded once for every row
         for row in rows:
             payee, upi_ref = narration_details(row.narration)
             if row.ref and re.fullmatch(r"\d{12}", row.ref):
@@ -514,13 +516,19 @@ def import_rows(rows: list[StatementRow], account: str | int, filename: str | No
                 result.merged += 1
                 continue
 
-            category_id = _categorize(conn, payee, row.narration, row.direction)
+            category_id, why = _categorize_detail(conn, payee, row.narration, row.direction, ctx)
+            suggested_id = _suggestion_id(conn, why)
+            # Rows the fixed layers could not place stay in the catch-all and wait ('pending') for the optional model pass.
             conn.execute(
                 """INSERT INTO transactions (account_id, amount, direction, txn_date, payee, description,
-                                             upi_ref, fingerprint, category_id, source, raw_text, import_batch_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'statement', %s, %s)""",
+                                             upi_ref, fingerprint, category_id, source, raw_text, import_batch_id,
+                                             category_source, category_confidence, category_reason,
+                                             suggested_category_id, suggested_confidence, classify_state)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'statement', %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (account_id, row.amount, row.direction, row.txn_date, payee, row.narration,
-                 upi_ref, fingerprint, category_id, f"line {row.line}: {row.narration}", batch_id),
+                 upi_ref, fingerprint, category_id, f"line {row.line}: {row.narration}", batch_id,
+                 why.source, why.confidence, why.reason, suggested_id, why.suggested_confidence if suggested_id else None,
+                 "pending" if why.source == "fallback" else None),
             )
             result.added += 1
 

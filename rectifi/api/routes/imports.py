@@ -48,7 +48,9 @@ def outcome_for(batch_id: int, *, kind: str, how: str | None, review_lines: list
         raise ApiError(404, "not_found", "That import is gone.")
     recon, reason = balance_check(batch["account_id"])
     return {"outcome": kind, "batch": batch_card(batch), "how": how, "needs_review_lines": review_lines,
-            "skipped": skipped, "reconcile": recon, "reconcile_reason": reason}
+            "skipped": skipped, "reconcile": recon, "reconcile_reason": reason,
+            "classify_job_id": tools.classify_job_for_batch(batch_id),
+            "categories": wire.batch_summary(tools.batch_source_counts(batch_id))}
 
 
 def columns_of(table) -> list[str]:
@@ -125,10 +127,22 @@ def process_upload(filename: str, data: bytes, password: str | None, manual: boo
             "columns": columns_of(table), "mapping": check.mapping, "preview": preview, "preview_error": preview_error}
 
 
+def start_sorting(batch_id: int) -> None:
+    """The import is already saved with the fixed rules. If rows are still in Miscellaneous, queue the optional model pass
+    (or record that the model is off). The import never waits for it and never fails because of it."""
+    try:
+        from ...agent import jobs                              # lazy: rectifi.api must import without langchain
+
+        jobs.queue_for_batch(batch_id)
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
 def finish_import(rows, account_id: int, filename: str, digest: str, how: str, problems: list[str]) -> dict:
     result = import_rows(rows, account_id, filename)
     if result.batch_id is None:
         raise ApiError(422, "invalid", NOTHING_IMPORTED)
+    start_sorting(result.batch_id)
     skipped = list(problems[:PREVIEW_PROBLEMS])
     created = tools.get_import_batch(result.batch_id)["created_at"]       # tells this batch from a later one that reuses the id
     uploads.recent.put(digest, {"batch_id": result.batch_id, "created_at": created, "how": how,

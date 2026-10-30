@@ -1,0 +1,772 @@
+[
+ {
+  "narration": "UPI/DR/004291837000/SWIGGY/YESB/swiggy@ybl/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291837037/ZOMATO/YESB/zomato@icici/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291837074/DOMINOS PIZZA/YESB/dominos@hdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291837111/MCDONALDS/YESB/mcdonalds@axisbank/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291837148/BIGBASKET/YESB/bigbasket@ybl/Payment",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "UPI/DR/004291837185/BLINKIT/YESB/blinkit@paytm/Payment",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "UPI/DR/004291837222/ZEPTO/YESB/zepto@ybl/Payment",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "UPI/DR/004291837259/DMART READY/YESB/dmart@sbi/Payment",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "UPI/DR/004291837296/UBER INDIA/YESB/uber@axisbank/Payment",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "UPI/DR/004291837333/OLA CABS/YESB/olacabs@ybl/Payment",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "UPI/DR/004291837370/RAPIDO/YESB/rapido@ybl/Payment",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "UPI/DR/004291837407/IRCTC/YESB/irctc@sbi/Payment",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "UPI/DR/004291837444/AMAZON PAY/YESB/amazon@apl/Payment",
+  "direction": "debit",
+  "gold": "Shopping"
+ },
+ {
+  "narration": "UPI/DR/004291837481/FLIPKART/YESB/flipkart@axisbank/Payment",
+  "direction": "debit",
+  "gold": "Shopping"
+ },
+ {
+  "narration": "UPI/DR/004291837518/MYNTRA/YESB/myntra@ybl/Payment",
+  "direction": "debit",
+  "gold": "Shopping"
+ },
+ {
+  "narration": "UPI/DR/004291837555/NETFLIX/YESB/netflix@icici/Payment",
+  "direction": "debit",
+  "gold": "Subscriptions"
+ },
+ {
+  "narration": "UPI/DR/004291837592/SPOTIFY/YESB/spotify@ybl/Payment",
+  "direction": "debit",
+  "gold": "Subscriptions"
+ },
+ {
+  "narration": "UPI/DR/004291837629/HOTSTAR/YESB/hotstar@icici/Payment",
+  "direction": "debit",
+  "gold": "Subscriptions"
+ },
+ {
+  "narration": "UPI/DR/004291837666/CHATGPT/YESB/openai@icici/Payment",
+  "direction": "debit",
+  "gold": "Subscriptions"
+ },
+ {
+  "narration": "UPI/DR/004291837703/APOLLO PHARMACY/YESB/apollo@ybl/Payment",
+  "direction": "debit",
+  "gold": "Health"
+ },
+ {
+  "narration": "UPI/DR/004291837740/PHARMEASY/YESB/pharmeasy@ybl/Payment",
+  "direction": "debit",
+  "gold": "Health"
+ },
+ {
+  "narration": "UPI/DR/004291837777/BOOKMYSHOW/YESB/bms@icici/Payment",
+  "direction": "debit",
+  "gold": "Entertainment"
+ },
+ {
+  "narration": "UPI/DR/004291837814/PVR CINEMAS/YESB/pvr@icici/Payment",
+  "direction": "debit",
+  "gold": "Entertainment"
+ },
+ {
+  "narration": "UPI/DR/004291837851/AIRTEL PREPAID/YESB/airtel@icici/Payment",
+  "direction": "debit",
+  "gold": "Bills & Utilities"
+ },
+ {
+  "narration": "UPI/DR/004291837888/JIO RECHARGE/YESB/jio@icici/Payment",
+  "direction": "debit",
+  "gold": "Bills & Utilities"
+ },
+ {
+  "narration": "UPI/DR/004291837925/MAKEMYTRIP/YESB/mmt@icici/Payment",
+  "direction": "debit",
+  "gold": "Travel"
+ },
+ {
+  "narration": "UPI/DR/004291837962/INDIGO AIRLINES/YESB/indigo@icici/Payment",
+  "direction": "debit",
+  "gold": "Travel"
+ },
+ {
+  "narration": "UPI/DR/004291837999/URBAN COMPANY/YESB/urbancompany@icici/Payment",
+  "direction": "debit",
+  "gold": "Personal Care"
+ },
+ {
+  "narration": "UPI/DR/004291838036/COURSERA/YESB/coursera@icici/Payment",
+  "direction": "debit",
+  "gold": "Education"
+ },
+ {
+  "narration": "UPI/DR/004291838073/UDEMY/YESB/udemy@icici/Payment",
+  "direction": "debit",
+  "gold": "Education"
+ },
+ {
+  "narration": "UPI/DR/004291838110/ANAND SWEETS/YESB/anandsweets@okaxis/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291838147/HOTEL SARAVANA BHAVAN/YESB/saravana@ybl/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291838184/MURUGAN IDLI SHOP/YESB/murugan@paytm/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291838221/AMMA MESS/YESB/ammamess@ybl/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291838258/BARISTA COFFEE/YESB/barista@ybl/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291838295/CHAI POINT/YESB/chaipoint@ybl/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291838332/KFC/YESB/kfc@ybl/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291838369/A2B VEG RESTAURANT/YESB/a2b@ybl/Payment",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/004291838406/NILGIRIS SUPERMARKET/YESB/nilgiris@ybl/Payment",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "UPI/DR/004291838443/SRI LAKSHMI PROVISION STORE/YESB/lakshmistores@paytm/Payment",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "UPI/DR/004291838480/MORE RETAIL/YESB/moreretail@ybl/Payment",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "UPI/DR/004291838517/FRESH VEGETABLE MARKET/YESB/vegmarket@paytm/Payment",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "UPI/DR/004291838554/KSRTC BUS TICKET/YESB/ksrtc@ybl/Payment",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "UPI/DR/004291838591/CHENNAI METRO RAIL/YESB/cmrl@ybl/Payment",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "UPI/DR/004291838628/NAMMA YATRI/YESB/nammayatri@ybl/Payment",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "UPI/DR/004291838665/AUTO RIKSHAW STAND/YESB/autostand@paytm/Payment",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "UPI/DR/004291838702/TATA CLIQ/YESB/tatacliq@ybl/Payment",
+  "direction": "debit",
+  "gold": "Shopping"
+ },
+ {
+  "narration": "UPI/DR/004291838739/DECATHLON SPORTS/YESB/decathlon@ybl/Payment",
+  "direction": "debit",
+  "gold": "Shopping"
+ },
+ {
+  "narration": "UPI/DR/004291838776/CROMA ELECTRONICS/YESB/croma@ybl/Payment",
+  "direction": "debit",
+  "gold": "Shopping"
+ },
+ {
+  "narration": "UPI/DR/004291838813/LIFESTYLE STORES/YESB/lifestyle@ybl/Payment",
+  "direction": "debit",
+  "gold": "Shopping"
+ },
+ {
+  "narration": "UPI/DR/004291838850/MEDPLUS PHARMACY/YESB/medplus@ybl/Payment",
+  "direction": "debit",
+  "gold": "Health"
+ },
+ {
+  "narration": "UPI/DR/004291838887/FORTIS HOSPITAL/YESB/fortis@ybl/Payment",
+  "direction": "debit",
+  "gold": "Health"
+ },
+ {
+  "narration": "UPI/DR/004291838924/DR LAL PATHLABS/YESB/lalpath@ybl/Payment",
+  "direction": "debit",
+  "gold": "Health"
+ },
+ {
+  "narration": "UPI/DR/004291838961/SANKARA EYE CARE/YESB/sankara@ybl/Payment",
+  "direction": "debit",
+  "gold": "Health"
+ },
+ {
+  "narration": "UPI/DR/004291838998/PRIME VIDEO/YESB/amazonprime@apl/Payment",
+  "direction": "debit",
+  "gold": "Subscriptions"
+ },
+ {
+  "narration": "UPI/DR/004291839035/YOUTUBE PREMIUM/YESB/google@ybl/Payment",
+  "direction": "debit",
+  "gold": "Subscriptions"
+ },
+ {
+  "narration": "UPI/DR/004291839072/APPLE MEDIA SERVICES/YESB/apple@icici/Payment",
+  "direction": "debit",
+  "gold": "Subscriptions"
+ },
+ {
+  "narration": "UPI/DR/004291839109/TNEB ELECTRICITY BOARD/YESB/tneb@ybl/Payment",
+  "direction": "debit",
+  "gold": "Bills & Utilities"
+ },
+ {
+  "narration": "UPI/DR/004291839146/TATA SKY DTH/YESB/tatasky@ybl/Payment",
+  "direction": "debit",
+  "gold": "Bills & Utilities"
+ },
+ {
+  "narration": "UPI/DR/004291839183/BSNL BROADBAND/YESB/bsnl@ybl/Payment",
+  "direction": "debit",
+  "gold": "Bills & Utilities"
+ },
+ {
+  "narration": "UPI/DR/004291839220/CHENNAI METRO WATER/YESB/cmwssb@ybl/Payment",
+  "direction": "debit",
+  "gold": "Bills & Utilities"
+ },
+ {
+  "narration": "UPI/DR/004291839257/CULT FIT/YESB/cultfit@ybl/Payment",
+  "direction": "debit",
+  "gold": "Personal Care"
+ },
+ {
+  "narration": "UPI/DR/004291839294/GREEN TRENDS SALON/YESB/greentrends@ybl/Payment",
+  "direction": "debit",
+  "gold": "Personal Care"
+ },
+ {
+  "narration": "UPI/DR/004291839331/LAKME SALON/YESB/lakme@ybl/Payment",
+  "direction": "debit",
+  "gold": "Personal Care"
+ },
+ {
+  "narration": "UPI/DR/004291839368/CLEARTRIP/YESB/cleartrip@ybl/Payment",
+  "direction": "debit",
+  "gold": "Travel"
+ },
+ {
+  "narration": "UPI/DR/004291839405/OYO ROOMS/YESB/oyo@ybl/Payment",
+  "direction": "debit",
+  "gold": "Travel"
+ },
+ {
+  "narration": "UPI/DR/004291839442/TAJ HOTELS/YESB/taj@ybl/Payment",
+  "direction": "debit",
+  "gold": "Travel"
+ },
+ {
+  "narration": "UPI/DR/004291839479/REDBUS/YESB/redbus@ybl/Payment",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "UPI/DR/004291839516/BYJUS/YESB/byjus@ybl/Payment",
+  "direction": "debit",
+  "gold": "Education"
+ },
+ {
+  "narration": "UPI/DR/004291839553/UNACADEMY/YESB/unacademy@ybl/Payment",
+  "direction": "debit",
+  "gold": "Education"
+ },
+ {
+  "narration": "UPI/DR/004291839590/NPTEL EXAM FEE/YESB/nptel@ybl/Payment",
+  "direction": "debit",
+  "gold": "Education"
+ },
+ {
+  "narration": "UPI/DR/004291839627/IITM ONLINE DEGREE/YESB/iitm@sbi/Payment",
+  "direction": "debit",
+  "gold": "Education"
+ },
+ {
+  "narration": "UPI/DR/004291839664/GIVEINDIA/YESB/giveindia@ybl/Payment",
+  "direction": "debit",
+  "gold": "Gifts & Donations"
+ },
+ {
+  "narration": "UPI/DR/004291839701/TIRUPATI TEMPLE HUNDI/YESB/tirupati@sbi/Payment",
+  "direction": "debit",
+  "gold": "Gifts & Donations"
+ },
+ {
+  "narration": "UPI/DR/004291839738/BLUE CROSS TRUST/YESB/bluecross@ybl/Payment",
+  "direction": "debit",
+  "gold": "Gifts & Donations"
+ },
+ {
+  "narration": "UPI/DR/004291839775/RAHUL SHARMA/YESB/rahul@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291839812/PRIYA KRISHNAN/YESB/priya@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291839849/MOHAMMED IRFAN/YESB/mohammed@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291839886/KARTHIK RAJA/YESB/karthik@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291839923/LAKSHMI NARAYANAN/YESB/lakshmi@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291839960/ANITA DESAI/YESB/anita@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291839997/SURESH BABU/YESB/suresh@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291840034/DEEPA MENON/YESB/deepa@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291840071/VIGNESH KUMAR/YESB/vignesh@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291840108/FATIMA BEGUM/YESB/fatima@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291840145/ARUN PRASAD/YESB/arun@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/004291840182/KAVITHA S/YESB/kavitha@okhdfcbank/Payment",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/CR/004291840219/RAHUL SHARMA/YESB/rahul@oksbi/Payment",
+  "direction": "credit",
+  "gold": "Other income"
+ },
+ {
+  "narration": "UPI/CR/004291840256/PRIYA KRISHNAN/YESB/priya@oksbi/Payment",
+  "direction": "credit",
+  "gold": "Other income"
+ },
+ {
+  "narration": "UPI/CR/004291840293/SURESH BABU/YESB/suresh@oksbi/Payment",
+  "direction": "credit",
+  "gold": "Other income"
+ },
+ {
+  "narration": "UPI/CR/004291840330/KARTHIK RAJA/YESB/karthik@oksbi/Payment",
+  "direction": "credit",
+  "gold": "Other income"
+ },
+ {
+  "narration": "ATM WDL/ATM/4455/MYLAPORE CHENNAI",
+  "direction": "debit",
+  "gold": "Cash Withdrawal"
+ },
+ {
+  "narration": "NWD-512345-ANNA NAGAR",
+  "direction": "debit",
+  "gold": "Cash Withdrawal"
+ },
+ {
+  "narration": "CASH WITHDRAWAL SELF CHQ",
+  "direction": "debit",
+  "gold": "Cash Withdrawal"
+ },
+ {
+  "narration": "NEFT CR-ACME TECHNOLOGIES PVT LTD-SALARY SEP 2026",
+  "direction": "credit",
+  "gold": "Salary & Allowance"
+ },
+ {
+  "narration": "IMPS CR SAL CR OCT 26",
+  "direction": "credit",
+  "gold": "Salary & Allowance"
+ },
+ {
+  "narration": "NEFT CR IITM ALLOWANCE STIPEND OCT",
+  "direction": "credit",
+  "gold": "Salary & Allowance"
+ },
+ {
+  "narration": "INT.PD:01-07-2026 TO 30-09-2026",
+  "direction": "credit",
+  "gold": "Interest & Cashback"
+ },
+ {
+  "narration": "CREDIT INTEREST CAPITALISED",
+  "direction": "credit",
+  "gold": "Interest & Cashback"
+ },
+ {
+  "narration": "UPI CR CASHBACK PAYTM",
+  "direction": "credit",
+  "gold": "Interest & Cashback"
+ },
+ {
+  "narration": "SMS ALERT CHRGS FOR Q2",
+  "direction": "debit",
+  "gold": "Fees & Charges"
+ },
+ {
+  "narration": "ANNUAL FEE DEBIT CARD",
+  "direction": "debit",
+  "gold": "Fees & Charges"
+ },
+ {
+  "narration": "MIN BAL CHARGES OCT",
+  "direction": "debit",
+  "gold": "Fees & Charges"
+ },
+ {
+  "narration": "ATM FEE NFS",
+  "direction": "debit",
+  "gold": "Fees & Charges"
+ },
+ {
+  "narration": "ACH D- BAJAJ FINANCE LTD-EMI 4412",
+  "direction": "debit",
+  "gold": "EMI & Loans"
+ },
+ {
+  "narration": "NACH DR HDB FINANCIAL SERVICES",
+  "direction": "debit",
+  "gold": "EMI & Loans"
+ },
+ {
+  "narration": "HOME LOAN EMI AUTO DEBIT",
+  "direction": "debit",
+  "gold": "EMI & Loans"
+ },
+ {
+  "narration": "ACH D- ZERODHA BROKING LTD",
+  "direction": "debit",
+  "gold": "Investments"
+ },
+ {
+  "narration": "SIP NIPPON INDIA MUTUAL FUND",
+  "direction": "debit",
+  "gold": "Investments"
+ },
+ {
+  "narration": "NPS TIER 1 CONTRIBUTION",
+  "direction": "debit",
+  "gold": "Investments"
+ },
+ {
+  "narration": "GROWW INVEST UPI",
+  "direction": "debit",
+  "gold": "Investments"
+ },
+ {
+  "narration": "PPF DEPOSIT SBI",
+  "direction": "debit",
+  "gold": "Investments"
+ },
+ {
+  "narration": "UPI/DR/402918374655/NOBROKER RENT/ICIC/nobroker@icici/October rent",
+  "direction": "debit",
+  "gold": "Rent"
+ },
+ {
+  "narration": "RENT FOR OCTOBER MR GOPAL",
+  "direction": "debit",
+  "gold": "Rent"
+ },
+ {
+  "narration": "FLAT RENT SEPT NEFT",
+  "direction": "debit",
+  "gold": "Rent"
+ },
+ {
+  "narration": "HPCL RETAIL OUTLET PALA",
+  "direction": "debit",
+  "gold": "Fuel"
+ },
+ {
+  "narration": "BPCL FUEL STATION KOTTAYAM",
+  "direction": "debit",
+  "gold": "Fuel"
+ },
+ {
+  "narration": "INDIAN OIL PETROL PUMP",
+  "direction": "debit",
+  "gold": "Fuel"
+ },
+ {
+  "narration": "NAYARA ENERGY KOCHI",
+  "direction": "debit",
+  "gold": "Fuel"
+ },
+ {
+  "narration": "SRI KRISHNA MEDICAL STORE",
+  "direction": "debit",
+  "gold": "Health"
+ },
+ {
+  "narration": "CITY HOSPITAL PAYMENT",
+  "direction": "debit",
+  "gold": "Health"
+ },
+ {
+  "narration": "DENTAL CLINIC PALA",
+  "direction": "debit",
+  "gold": "Health"
+ },
+ {
+  "narration": "TRANSFER TO SELF SBI",
+  "direction": "debit",
+  "gold": "Transfers"
+ },
+ {
+  "narration": "OWN A/C TRANSFER",
+  "direction": "debit",
+  "gold": "Transfers"
+ },
+ {
+  "narration": "IMPS SELF 9988",
+  "direction": "debit",
+  "gold": "Transfers"
+ },
+ {
+  "narration": "REFUND FOR FAILED ORDER 4418",
+  "direction": "credit",
+  "gold": "Refunds"
+ },
+ {
+  "narration": "REVERSAL OF UPI TXN",
+  "direction": "credit",
+  "gold": "Refunds"
+ },
+ {
+  "narration": "NEFT REFUND AMAZON ORDER",
+  "direction": "credit",
+  "gold": "Refunds"
+ },
+ {
+  "narration": "MOBILE RECHARGE PREPAID 299",
+  "direction": "debit",
+  "gold": "Bills & Utilities"
+ },
+ {
+  "narration": "ELECTRICITY BILL PAYMENT KSEB",
+  "direction": "debit",
+  "gold": "Bills & Utilities"
+ },
+ {
+  "narration": "BROADBAND BILL ACT FIBERNET",
+  "direction": "debit",
+  "gold": "Bills & Utilities"
+ },
+ {
+  "narration": "TUITION FEES MONTHLY",
+  "direction": "debit",
+  "gold": "Education"
+ },
+ {
+  "narration": "EXAM FEE NPTEL",
+  "direction": "debit",
+  "gold": "Education"
+ },
+ {
+  "narration": "SCHOOL FEES TERM 2",
+  "direction": "debit",
+  "gold": "Education"
+ },
+ {
+  "narration": "FITNESS GYM MEMBERSHIP",
+  "direction": "debit",
+  "gold": "Personal Care"
+ },
+ {
+  "narration": "SALON AND SPA",
+  "direction": "debit",
+  "gold": "Personal Care"
+ },
+ {
+  "narration": "TEMPLE DONATION",
+  "direction": "debit",
+  "gold": "Gifts & Donations"
+ },
+ {
+  "narration": "CHARITY CONTRIBUTION RED CROSS",
+  "direction": "debit",
+  "gold": "Gifts & Donations"
+ },
+ {
+  "narration": "MULTIPLEX MOVIE TICKETS",
+  "direction": "debit",
+  "gold": "Entertainment"
+ },
+ {
+  "narration": "CINEMA HALL TICKETS",
+  "direction": "debit",
+  "gold": "Entertainment"
+ },
+ {
+  "narration": "FLIGHT BOOKING AIR INDIA",
+  "direction": "debit",
+  "gold": "Travel"
+ },
+ {
+  "narration": "RESORT STAY MUNNAR",
+  "direction": "debit",
+  "gold": "Travel"
+ },
+ {
+  "narration": "RADIO TAXI AIRPORT",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "CAB FARE",
+  "direction": "debit",
+  "gold": "Transport"
+ },
+ {
+  "narration": "RESTAURANT BILL",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "BIRYANI BLUES",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "SUPERMARKET BILL",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "KIRANA STORE",
+  "direction": "debit",
+  "gold": "Groceries"
+ },
+ {
+  "narration": "UPI/DR/402918370001/PARENT TEACHER FUND/HDFC/ptf@ybl/Pay",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/402918370002/CURRENT ACCOUNT KIT/HDFC/cak@ybl/Pay",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/402918370003/PREMIUM TAILORS/HDFC/pt@ybl/Pay",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/402918370004/SIPHON CAFE LLP/HDFC/sc@ybl/Pay",
+  "direction": "debit",
+  "gold": "Food & Dining"
+ },
+ {
+  "narration": "UPI/DR/402918370005/ROOM RENTAL ADVANCE/HDFC/rr@ybl/Pay",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ },
+ {
+  "narration": "UPI/DR/402918370006/FLATMATE SHARE/HDFC/fs@ybl/Pay",
+  "direction": "debit",
+  "gold": "Miscellaneous"
+ }
+]
