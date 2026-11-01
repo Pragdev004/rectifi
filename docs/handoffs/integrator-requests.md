@@ -76,3 +76,10 @@ For other streams:
 Choices Prag may overrule:
 - Allow-list: a name of 4 letters or fewer must be a whole word (`ola`, `uber`, `pvr`, `ajio`), stricter than the plan's start-of-word. A wrong plain tag leaks a payee name; a missed one only loses a signed-out alert.
 - `enforce_sealed` also guards blind columns (must start `b1:`). `alert_rules.target` is not trigger-guarded (depends on the allow-list; WS-ALERTS enforces in code). `conversations.thread_id` stays a global primary key (random UUIDs, owner-only). Non-unique indexes do not start with `user_id` (fine for a few friends).
+- Primary keys of `budgets` and `balance_snapshots` now start with `user_id` (the plan kept them). With ids shared across people, B inserting a budget for A's category id got a duplicate-key error that told B the id and month exist. ON CONFLICT targets changed in tools.py and importer.py.
+
+Cost and test facts:
+- `fresh_db` (drop all tables + `init_db`) went from 245 ms to 414 ms median per test (+170 ms; about +5 minutes over 1,900 tests). Part A 99 ms, Part B 97 ms, drop 82 ms. A cheap fix if wanted: in conftest, TRUNCATE instead of DROP when the schema is current. Not done: it changes what every test starts from.
+- Not run here, still pending for the integrator: the `ws/alerts` commit d62092c touches only tests/test_web_e2e.py and test_web_e2e_chat.py, so no conflict is expected with this branch. It also fixes test_web_e2e::test_phone_navigation_and_the_more_sheet, which fails at 530565d.
+- `tests/test_seed_demo.py` errors (2) in this worktree because its .env uses the key=value connection form and the test builds URLs with rsplit('/'). Same errors at 530565d. A URL-form DATABASE_URL avoids them.
+
