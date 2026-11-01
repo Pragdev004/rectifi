@@ -194,6 +194,12 @@ def public_mode() -> bool:
     return _flag("RECTIFI_PUBLIC") or not ipaddress.ip_address(bind_host()).is_loopback
 
 
+def multiuser() -> bool:
+    """True when RECTIFI_MULTIUSER=1: invite sign-up, one account per person, text stored encrypted. Off by default
+    (laptop mode: one person, user 1, today's behaviour). Streamlit and the MCP server refuse to run when it is on."""
+    return _flag("RECTIFI_MULTIUSER")
+
+
 def web_search() -> bool:
     """Optional web search for the knowledge Q&A (RECTIFI_WEB_SEARCH=1). Off by default: your questions would leave the laptop."""
     return _flag("RECTIFI_WEB_SEARCH")
