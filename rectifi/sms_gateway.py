@@ -40,7 +40,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from . import alerts, config, tools
-from .db import DatabaseUnavailable, init_db
+from .db import DatabaseUnavailable, TenancyMigrationNeeded, UnsafeDatabaseRole, init_db
 
 log = logging.getLogger("rectifi.sms_gateway")
 
@@ -205,6 +205,9 @@ def create_app() -> Starlette:
         try:
             await run_in_threadpool(init_db)
             await run_in_threadpool(alerts.ensure_watermark)
+        except (TenancyMigrationNeeded, UnsafeDatabaseRole) as exc:
+            log.error("%s", exc)                    # the gateway does not start; the message says what to do
+            raise
         except DB_ERRORS:
             log.warning("The database is not reachable yet. /sms answers 503 (the phone retries) until it is.")
         if config.sms_host_is_open():

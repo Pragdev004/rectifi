@@ -76,7 +76,7 @@ class PgVectorStore(VectorStore):
                 row = conn.execute(
                     """INSERT INTO rag_chunks (document_id, txn_id, corpus, chunk_index, content, metadata, content_hash, embed_model, embedding)
                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
-                       ON CONFLICT (corpus, COALESCE(document_id, 0), COALESCE(txn_id, 0), chunk_index, embed_model)
+                       ON CONFLICT (user_id, corpus, COALESCE(document_id, 0), COALESCE(txn_id, 0), chunk_index, embed_model)
                        DO UPDATE SET content = EXCLUDED.content, metadata = EXCLUDED.metadata, content_hash = EXCLUDED.content_hash,
                                      embedding = EXCLUDED.embedding, created_at = now()
                        RETURNING id""",

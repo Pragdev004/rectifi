@@ -124,7 +124,7 @@ def test_delete_removes_the_row_the_checkpoints_and_the_spans(client, setup):
         assert conn.execute("SELECT count(*) AS n FROM checkpoints WHERE thread_id = %s", (tid,)).fetchone()["n"] > 0
         assert conn.execute("SELECT count(*) AS n FROM trace_spans WHERE thread_id = %s", (tid,)).fetchone()["n"] > 0
     assert client.delete(f"/api/chat/threads/{tid}").json() == {"deleted": True}
-    with psycopg.connect(config.database_url()) as raw:
+    with psycopg.connect(config.database_url(), options="-c app.user_id=1") as raw:
         for table in ("checkpoints", "checkpoint_writes", "checkpoint_blobs"):
             assert raw.execute(f"SELECT count(*) FROM {table} WHERE thread_id = %s", (tid,)).fetchone()[0] == 0
         assert raw.execute("SELECT count(*) FROM trace_spans WHERE thread_id = %s", (tid,)).fetchone()[0] == 0

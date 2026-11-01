@@ -172,7 +172,7 @@ def get_prefs(conn=None) -> dict:
 def _write_prefs(prefs: dict, conn=None) -> None:
     payload = json.dumps({k: prefs[k] for k in PREF_DEFAULTS})
     sql = ("INSERT INTO app_settings (key, value) VALUES ('alerts.prefs', %s::jsonb) "
-           "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()")
+           "ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()")
     if conn is not None:
         conn.execute(sql, (payload,))
         return
@@ -293,7 +293,7 @@ def create_rule(scope: str, target: str, period: str, cap) -> dict:
         # Saving the same merchant/period again just changes its cap (and un-mutes it).
         return conn.execute(
             "INSERT INTO alert_rules (scope, target, period, cap) VALUES (%s, %s, %s, %s) "
-            "ON CONFLICT (scope, target, period) DO UPDATE SET cap = EXCLUDED.cap, muted = false, snoozed_until = NULL "
+            "ON CONFLICT (user_id, scope, target_blind, period) DO UPDATE SET cap = EXCLUDED.cap, muted = false, snoozed_until = NULL "
             "RETURNING id, scope, target, period, cap, muted, snoozed_until, created_at",
             (scope, target, period, value)).fetchone()
 
@@ -730,7 +730,7 @@ def _read_watermark(conn) -> int | None:
 
 
 def _write_watermark(conn, txn_id: int) -> None:
-    conn.execute("INSERT INTO app_settings (key, value) VALUES (%s, %s::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+    conn.execute("INSERT INTO app_settings (key, value) VALUES (%s, %s::jsonb) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
                  (WATERMARK_KEY, json.dumps({"txn_id": int(txn_id)})))
 
 
@@ -787,7 +787,7 @@ def _insert(conn, a: Alert, state: str, now: datetime) -> int | None:
     row = conn.execute(
         """INSERT INTO alerts (dedupe_key, kind, severity, title, detail, push_title, push_body, numbers, rule_id, txn_id, scope_key, created_at, push_state)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
-           ON CONFLICT (dedupe_key) DO NOTHING RETURNING id""",
+           ON CONFLICT (user_id, dedupe_key) DO NOTHING RETURNING id""",
         (a.dedupe_key, a.kind, a.severity, a.title, a.detail, a.push_title, a.push_body, _numbers_json(a.numbers),
          a.rule_id, a.txn_id, a.scope_key, now, state)).fetchone()
     return row["id"] if row else None
@@ -1011,7 +1011,7 @@ def _digest(prefs: dict, now: datetime) -> int:
     with connect() as conn:
         written = _insert(conn, a, _gate(conn, a, prefs, now), now) is not None
         if written:
-            conn.execute("INSERT INTO app_settings (key, value) VALUES ('alerts.digest_last', %s::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+            conn.execute("INSERT INTO app_settings (key, value) VALUES ('alerts.digest_last', %s::jsonb) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
                          (json.dumps({"date": ctx.today.isoformat()}),))
     return int(written)
 
@@ -1128,7 +1128,7 @@ def add_subscription(endpoint: str, p256dh: str, auth: str, label: str | None = 
     with connect() as conn:
         row = conn.execute(
             "INSERT INTO push_subscriptions (endpoint, p256dh, auth, label) VALUES (%s, %s, %s, %s) "
-            "ON CONFLICT (endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, label = COALESCE(EXCLUDED.label, push_subscriptions.label), fail_count = 0 "
+            "ON CONFLICT (user_id, endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, label = COALESCE(EXCLUDED.label, push_subscriptions.label), fail_count = 0 "
             "RETURNING id", (endpoint, p256dh, auth, label)).fetchone()
     return get_subscription(row["id"])
 

@@ -19,7 +19,7 @@ def seed(url, *args):
 
 
 def count(url):
-    with psycopg.connect(url) as conn:
+    with psycopg.connect(url, options="-c app.user_id=1") as conn:     # row level security: look as user 1
         return conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
 
 

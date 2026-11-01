@@ -56,3 +56,23 @@ Test DBs: conftest needs names ending `_test` → per-worktree DBs are `rectifi_
 8. .env.example + README: RECTIFI_PASSWORD_HASH, RECTIFI_SESSION_SECRET, RECTIFI_PUBLIC.
 9. CLAUDE.md: rule 11 addendum (A3); map/commands for set-password, deploy-check; docs/HOSTING.md.
 Unverified: docker build/run, aarch64 wheels, read_only FS vs chart sandbox writes (chart sandbox needs a writable tmp dir — check against compose read_only+tmpfs), Oracle, Tailscale Serve Host header, Funnel on free plan, ollama image tag.
+
+
+## WS-FOUNDATION (ws/foundation, multi-user plan stage 2)
+
+For the integrator:
+1. PROGRESS.md and CLAUDE.md were not touched here, so seven branches do not conflict. Add the foundation entry and CLAUDE.md rules 18 to 20 (plan section 9). Map rows for `rectifi/userctx.py`, `vault.py`, `sealed_fields.py`, `merchant_allowlist.py`, `hooks.py`, `tests/support/tenants.py`, `scripts/devtools/users.py`.
+2. docs/HOSTING.md (WS-DEPLOY): the compose files now have two logins, `postgres` (superuser: set-up and backups) and `rectifi` (the app, a plain role), and a new required `RECTIFI_DB_PASSWORD` in `.env.deploy` (different from `POSTGRES_PASSWORD`). Every `-U rectifi` for backup, restore and `psql` in HOSTING.md becomes `-U postgres` (a plain role cannot `pg_dump` forced tables; the login_lock fix too). An old Docker volume keeps its superuser login: document export, `down -v`, `up`, import.
+3. scripts/devtools/deploy.py (WS-DEPLOY): `deploy-check` should require `RECTIFI_DB_PASSWORD` (same rules as `POSTGRES_PASSWORD`, and not equal to it). Not edited here.
+4. No Docker on this laptop: `deploy/compose.oracle.yml`, `deploy/db-init/10-app-role.sh` and `docker-compose.yml` have static checks only. Run them once where Docker exists.
+5. Prag's real database was never touched. After merge his laptop app will not start until he backs up and runs `python scripts/dev.py migrate-tenancy`. `dev.py init`, `up`, `phone`, the web server and Streamlit print the plain message; `dev.py doctor` shows a WARN.
+
+For other streams:
+- WS-AUTH: call `db.seed_user(uid)` at sign-up and `hooks.after_sign_in(ctx)` after the cookie is set. `UserContext` has one extra field, `private_key: bytes | None = None` (the row factory needs it to open `rs1.` values); every field but `uid` has a default. `vault.py` has the key helpers (`derive_password_keys`, `wrap_key`, `unwrap_key`, `new_recovery_code`, `recovery_key`, `new_keypair`). `tests/support/tenants.py::make_user` builds a context with fresh keys.
+- WS-CORE: `authenticate_device` must look the token up under `db.connect_system(...)` (policy `device_lookup` lets a system connection READ `phone_devices`), then bind the person for every write. `pattern_blind` / `target_blind` are filled from the plain column by a trigger when an INSERT omits them; an encrypted person must pass `vault.blind(...)` or `enforce_sealed` refuses. That trigger also refuses plain text in any `sealed_fields.SEALED` column for `users.encrypted = true`; on UPDATE only changed columns are checked.
+- WS-AI, WS-ALERTS: `tests/test_userctx.py::KNOWN_BARE_THREADS` lists files still using `threading.Thread`. Remove your entries when you move to `userctx.spawn`; the list may only shrink.
+- WS-ALERTS: `alerts.py` watermark, prefs and digest marker are now `app_settings (user_id, key)`, so they are per person already. The advisory lock ids are still global.
+
+Choices Prag may overrule:
+- Allow-list: a name of 4 letters or fewer must be a whole word (`ola`, `uber`, `pvr`, `ajio`), stricter than the plan's start-of-word. A wrong plain tag leaks a payee name; a missed one only loses a signed-out alert.
+- `enforce_sealed` also guards blind columns (must start `b1:`). `alert_rules.target` is not trigger-guarded (depends on the allow-list; WS-ALERTS enforces in code). `conversations.thread_id` stays a global primary key (random UUIDs, owner-only). Non-unique indexes do not start with `user_id` (fine for a few friends).
