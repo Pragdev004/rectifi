@@ -299,3 +299,82 @@ def test_the_alerts_tabs_work_from_the_keyboard(browser, live_server):
     page.wait_for_selector("text=Alerts on your phone")
     assert page.url.endswith("tab=delivery")
     assert not problems, problems
+
+
+# ───────────────────────── Service worker under the real CSP ─────────────────────────
+
+WATCH_CSP = """
+window.__csp = [];
+document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI));
+"""
+
+
+def test_the_service_worker_registers_under_the_real_csp(browser, live_server):
+    seed()
+    page, problems = new_page(browser, live_server, "desktop")
+    page.add_init_script(WATCH_CSP)
+    response = page.goto("/")
+    assert "script-src 'self'" in response.headers["content-security-policy"]       # the real policy, not a relaxed one
+    page.wait_for_selector("main")
+    seen = page.evaluate(
+        """async () => {
+            const reg = await navigator.serviceWorker.register('/sw.js');
+            const worker = reg.installing || reg.waiting || reg.active;
+            if (worker.state !== 'activated') {
+                await new Promise((done, fail) => {
+                    worker.addEventListener('statechange', () => {
+                        if (worker.state === 'activated') done();
+                        if (worker.state === 'redundant') fail(new Error('the worker became redundant'));
+                    });
+                });
+            }
+            const ready = await navigator.serviceWorker.ready;
+            return { scope: ready.scope, state: ready.active.state, script: ready.active.scriptURL };
+        }"""
+    )
+    assert seen["state"] == "activated"
+    assert seen["scope"] == live_server.url.rstrip("/") + "/"
+    assert seen["script"].endswith("/sw.js")
+    assert page.evaluate("window.__csp") == []                                      # no CSP violation on the page
+    assert not problems, problems                                                   # Chromium logs a violation as a console error too
+
+
+@pytest.fixture(scope="module")
+def full_chromium(browser):
+    """The default headless shell always reports Notification.permission as 'denied'. The full Chromium in new-headless mode honours a grant."""
+    try:
+        b = browser.browser_type.launch(channel="chromium", args=["--proxy-server=direct://"])
+    except Exception as exc:                     # noqa: BLE001
+        pytest.skip(f"full Chromium could not start: {exc}")
+    yield b
+    b.close()
+
+
+def test_tapping_turn_on_phone_alerts_ends_in_words_never_a_hang(full_chromium, live_server):
+    """Headless Chromium has no real push service, so we do not assert that subscribing works. We assert that the page says what
+    happened in plain words, the button comes back, nothing crashes, and the subscriptions table agrees with what the page said."""
+    seed()
+    page, problems = new_page(full_chromium, live_server, "desktop")
+    page.context.grant_permissions(["notifications"], origin=live_server.url)
+    page.add_init_script(WATCH_CSP)
+    page.goto("/alerts?tab=delivery")
+    page.wait_for_selector("text=Alerts on your phone")
+    assert page.evaluate("Notification.permission") == "granted"
+    button = page.get_by_role("button", name="Turn on phone alerts")
+    button.wait_for()
+    button.click()
+    toast = page.locator("[role=status][aria-live]").filter(has_text=re.compile(r"\S"))         # the toast region, once it holds any words
+    toast.wait_for(timeout=30000)
+    said = toast.inner_text().strip()
+    page.wait_for_function("!document.body.innerText.includes('Turning on')", timeout=30000)      # the busy label cleared: no hang
+    with connect() as conn:
+        rows = conn.execute("SELECT count(*) AS n FROM push_subscriptions").fetchone()["n"]
+    registered = page.evaluate("navigator.serviceWorker.getRegistrations().then(r => r.map(x => x.scope))")
+    assert said and registered == [live_server.url.rstrip("/") + "/"]              # the page said something; the worker is registered at /
+    if "Phone alerts are on" in said:
+        assert rows == 1
+    else:
+        assert rows == 0                                                           # a failed subscribe writes nothing
+    assert page.evaluate("window.__csp") == []
+    assert not [p for p in problems if p.startswith("pageerror")], problems            # Chromium's own "no Push API in incognito" console line is not a page error
+    assert page.locator("main").count() == 1                                        # the page is still there
