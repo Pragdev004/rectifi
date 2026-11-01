@@ -213,8 +213,9 @@ def _migrate_categories(conn) -> None:
     elif LEGACY_FALLBACK_EXPENSE in has:
         log.info("Both %r and %r exist; leaving both alone.", LEGACY_FALLBACK_EXPENSE, FALLBACK_EXPENSE)
 
-    for name, kind in DEFAULT_CATEGORIES:
-        conn.execute("INSERT INTO categories (name, kind) VALUES (%s, %s) ON CONFLICT (user_id, name) DO NOTHING", (name, kind))
+    # One statement each (not one per row): this runs for every new person and on every test database.
+    conn.execute("INSERT INTO categories (name, kind) SELECT * FROM unnest(%s::text[], %s::text[]) AS v(name, kind) ON CONFLICT (user_id, name) DO NOTHING",
+                 ([n for n, _ in DEFAULT_CATEGORIES], [k for _, k in DEFAULT_CATEGORIES]))
 
     first_time = conn.execute("SELECT 1 FROM app_settings WHERE key = %s", (MIGRATION_MARKER,)).fetchone() is None
     if first_time:
@@ -226,14 +227,15 @@ def _migrate_categories(conn) -> None:
         conn.execute("UPDATE merchant_rules SET source = 'learned' WHERE source = 'default' AND pattern <> ALL(%s)", (every_default,))
         conn.execute("INSERT INTO app_settings (key, value) VALUES (%s, 'true'::jsonb) ON CONFLICT (user_id, key) DO NOTHING", (MIGRATION_MARKER,))
 
-    for category, patterns in DEFAULT_RULES.items():
-        for pattern in patterns:
-            conn.execute(
-                """INSERT INTO merchant_rules (pattern, category_id)
-                   SELECT %s, id FROM categories WHERE name = %s
-                   ON CONFLICT (user_id, pattern_blind) DO NOTHING""",
-                (pattern, category),
-            )
+    rule_patterns = [pattern for patterns in DEFAULT_RULES.values() for pattern in patterns]
+    rule_categories = [category for category, patterns in DEFAULT_RULES.items() for _ in patterns]
+    conn.execute(
+        """INSERT INTO merchant_rules (pattern, category_id)
+           SELECT v.pattern, c.id FROM unnest(%s::text[], %s::text[]) WITH ORDINALITY AS v(pattern, category, n)
+           JOIN categories c ON c.name = v.category ORDER BY v.n
+           ON CONFLICT (user_id, pattern_blind) DO NOTHING""",
+        (rule_patterns, rule_categories),
+    )
 
 
 
