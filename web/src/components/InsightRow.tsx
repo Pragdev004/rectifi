@@ -75,7 +75,7 @@ export function InsightRow({ insight, compact, explainOk }: { insight: Insight; 
   );
 }
 
-function ExplainNote({ result }: { result: ExplainResult }) {
+export function ExplainNote({ result }: { result: ExplainResult }) {
   if (result.text) {
     return (
       <div className={styles.note} role="status">
