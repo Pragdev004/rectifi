@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 DEV = ROOT / "scripts" / "dev.py"
 
@@ -460,3 +462,59 @@ def test_build_web_runs_npm_ci_build_and_test_then_writes_build_info(monkeypatch
 def test_doctor_reports_the_web_build():
     out = dev("doctor").stdout
     assert "Web app" in out
+
+
+def funnel_dev(monkeypatch, *, funnel, password="", public=""):
+    dev_module = load_dev()
+    monkeypatch.setenv("RECTIFI_PASSWORD_HASH", password)
+    monkeypatch.setenv("RECTIFI_PUBLIC", public)
+    monkeypatch.setenv("RECTIFI_BIND_HOST", "127.0.0.1")
+    ts = dev_module.load_tailscale_helpers()
+    monkeypatch.setattr(dev_module, "load_tailscale_helpers", lambda: ts)
+    monkeypatch.setattr(ts, "find_cli", lambda: "tailscale")
+    monkeypatch.setattr(ts, "read_funnel_exposes_app", lambda cli, port=8501, runner=None: funnel)
+    return dev_module
+
+
+def test_up_refuses_to_start_when_funnel_is_on_and_there_is_no_login(monkeypatch):
+    dev_module = funnel_dev(monkeypatch, funnel=True)
+    started = []
+    monkeypatch.setattr(dev_module, "database_reachable", lambda: started.append("db") or True)
+    monkeypatch.setattr(dev_module, "cmd_init", lambda a: started.append("init"))
+    monkeypatch.setattr(dev_module, "cmd_app", lambda a: started.append("app"))
+    with pytest.raises(SystemExit) as stop:
+        dev_module.cmd_up(None)
+    assert "Funnel is on: set RECTIFI_PUBLIC=1 and run `python scripts/dev.py set-password` first" in str(stop.value)
+    assert started == []
+
+
+@pytest.mark.parametrize("kw", [{"funnel": False}, {"funnel": True, "public": "1"}, {"funnel": True, "password": "scrypt$x"}])
+def test_up_starts_when_there_is_no_funnel_or_a_login_is_on(monkeypatch, kw):
+    dev_module = funnel_dev(monkeypatch, **kw)
+    started = []
+    monkeypatch.setattr(dev_module, "database_reachable", lambda: True)
+    monkeypatch.setattr(dev_module, "cmd_init", lambda a: None)
+    monkeypatch.setattr(dev_module, "cmd_app", lambda a: started.append("app"))
+    monkeypatch.setattr(dev_module, "gateway_enabled", lambda: False)
+    dev_module.cmd_up(None)
+    assert started == ["app"]
+
+
+def test_funnel_check_is_quiet_without_tailscale(monkeypatch):
+    dev_module = load_dev()
+    monkeypatch.setenv("RECTIFI_PASSWORD_HASH", "")
+    monkeypatch.setenv("RECTIFI_PUBLIC", "")
+    ts = dev_module.load_tailscale_helpers()
+    monkeypatch.setattr(dev_module, "load_tailscale_helpers", lambda: ts)
+    monkeypatch.setattr(ts, "find_cli", lambda: None)
+    assert dev_module.funnel_without_login() is False
+
+
+def test_doctor_fails_when_funnel_is_on_without_a_login(monkeypatch, capsys):
+    import argparse
+
+    dev_module = funnel_dev(monkeypatch, funnel=True)
+    with pytest.raises(SystemExit) as stop:
+        dev_module.cmd_doctor(argparse.Namespace(quick=True))
+    out = capsys.readouterr().out
+    assert stop.value.code == 1 and "FAIL  Tailscale Funnel" in out and "RECTIFI_PUBLIC=1" in out and "set-password" in out

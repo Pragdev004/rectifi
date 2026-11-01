@@ -132,7 +132,9 @@ def status() -> dict:
         ok, why = llm_status()
         return {"ok": bool(ok), "why": why or "", "notice": llm_notice() if ok else "", "model": describe()}
     except Exception as exc:                         # a broken model setting must never break the page
-        return {"ok": False, "why": str(exc), "notice": "", "model": "?"}
+        from ..agent.llm import redact          # lazy: rectifi.api must not load rectifi.agent at import time
+
+        return {"ok": False, "why": redact(exc), "notice": "", "model": "?"}
 
 
 def require_model() -> None:
@@ -425,7 +427,7 @@ def _finish_stop(graph, cfg: dict, turn: Turn) -> None:
     kept = [m.model_copy(update={"additional_kwargs": {**(m.additional_kwargs or {}), "ts": (m.additional_kwargs or {}).get("ts") or now_iso(),
                                                          "route": "agent"}}) for m in _salvage(graph, cfg)]
     text = turn.partial.strip() or "(You stopped this answer.)"
-    stopped = AIMessage(text, id=str(uuid.uuid4()), additional_kwargs={"ts": now_iso(), "stopped": True, "unverified": [], "route": "agent"})
+    stopped = AIMessage(text, id=str(uuid.uuid4()), additional_kwargs={"ts": now_iso(), "stopped": True, "route": "agent"})   # no "unverified" key: chat_transcript works it out
     graph.update_state(cfg, {"messages": [*kept, stopped]}, as_node="verify_amounts")
 
 
@@ -552,7 +554,7 @@ def fork_point(graph, thread_id: str):
     last_human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
     if last_human is None:
         return None, None
-    for snap in graph.get_state_history(cfg):
+    for snap in graph.get_state_history(cfg, limit=200):
         msgs = (snap.values or {}).get("messages") or []
         if msgs and msgs[-1].id == last_human.id and tuple(snap.next) == ("load_context",):
             return snap, last_human

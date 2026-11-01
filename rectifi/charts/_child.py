@@ -88,7 +88,7 @@ def _install_audit(job_dir: str, read_roots: list[str], code_obj, runs: int) -> 
     allowed_exec = {id(code_obj): runs}
     write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
     blocked_prefixes = ("socket.", "ctypes.", "subprocess.", "os.exec", "os.spawn", "os.posix_spawn", "os.fork", "os.forkpty",
-                        "os.system", "os.startfile", "pty.", "msvcrt.", "winreg.", "webbrowser.", "smtplib.", "ftplib.",
+                        "os.system", "os.startfile", "os.kill", "signal.pthread_kill", "pty.", "msvcrt.", "winreg.", "webbrowser.", "smtplib.", "ftplib.",
                         "http.client.", "urllib.Request", "telnetlib.", "imaplib.", "poplib.", "multiprocessing.")
     path_events = ("os.remove", "os.rename", "os.rmdir", "os.mkdir", "os.chmod", "os.chown", "os.truncate", "os.symlink",
                    "os.link", "os.utime", "os.setxattr", "shutil.rmtree", "shutil.copyfile", "shutil.copytree", "shutil.move",

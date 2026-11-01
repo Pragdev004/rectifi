@@ -345,3 +345,48 @@ def test_doctor_mentions_tailscale_and_warns_about_an_open_gateway(monkeypatch):
                             env={**__import__("os").environ, **env})
     assert "Tailscale:" in result.stdout or "Tailscale is installed" in result.stdout
     assert "open to everyone on your network" in result.stdout
+
+
+# ───────────── Funnel without a login ─────────────
+
+def funnel_status(allow=None, proxy="http://127.0.0.1:8501"):
+    return {"TCP": {"443": {"HTTPS": True}}, "Web": {"laptop.tail1a2b3.ts.net:443": {"Handlers": {"/": {"Proxy": proxy}}}},
+            "AllowFunnel": {"laptop.tail1a2b3.ts.net:443": True} if allow is None else allow}
+
+
+def test_funnel_on_for_the_app_is_seen():
+    assert tailscale.funnel_exposes_app(funnel_status()) is True
+    assert tailscale.funnel_exposes_app(funnel_status(proxy="http://localhost:8501/")) is True
+
+
+def test_serve_alone_funnel_off_or_another_port_is_not_flagged():
+    assert tailscale.funnel_exposes_app(SERVE) is False                                       # Serve, no AllowFunnel
+    assert tailscale.funnel_exposes_app(funnel_status(allow={"laptop.tail1a2b3.ts.net:443": False})) is False
+    assert tailscale.funnel_exposes_app(funnel_status(proxy="http://127.0.0.1:8765")) is False   # the gateway has its own token
+    assert tailscale.funnel_exposes_app(funnel_status(allow={"other.ts.net:8443": True})) is False
+
+
+@pytest.mark.parametrize("odd", [None, [], "x", {}, {"AllowFunnel": []}, {"AllowFunnel": {"a:443": True}},
+                                 {"AllowFunnel": {"a:443": True}, "Web": {"a:443": "oops"}},
+                                 {"AllowFunnel": {"a:443": True}, "Web": {"a:443": {"Handlers": ["x"]}}},
+                                 {"AllowFunnel": {"a:443": True}, "Web": {"a:443": {"Handlers": {"/": {"Proxy": 7}}}}}])
+def test_a_shape_it_cannot_read_is_treated_as_not_funnel(odd):
+    assert tailscale.funnel_exposes_app(odd) is False
+
+
+def test_reading_funnel_is_harmless_without_tailscale_or_with_bad_output():
+    assert tailscale.read_funnel_exposes_app(None) is False
+
+    class Done:
+        def __init__(self, code, out):
+            self.returncode, self.stdout = code, out
+
+    assert tailscale.read_funnel_exposes_app("ts", runner=lambda *a, **k: Done(0, json.dumps(funnel_status()))) is True
+    assert tailscale.read_funnel_exposes_app("ts", runner=lambda *a, **k: Done(1, "")) is False
+    assert tailscale.read_funnel_exposes_app("ts", runner=lambda *a, **k: Done(0, "not json")) is False
+
+    def broken(*a, **k):
+        raise FileNotFoundError
+
+    assert tailscale.read_funnel_exposes_app("ts", runner=broken) is False
+    assert "RECTIFI_PUBLIC=1" in tailscale.FUNNEL_MESSAGE and "set-password" in tailscale.FUNNEL_MESSAGE
