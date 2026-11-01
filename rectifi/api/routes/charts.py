@@ -52,7 +52,7 @@ def _status() -> dict:
         ok, why = llm_module.llm_status()
         return {"ok": bool(ok), "why": why or "", "model": llm_module.describe()}
     except Exception as exc:                      # noqa: BLE001 - a broken model setting must never break the page
-        return {"ok": False, "why": str(exc), "model": "?"}
+        return {"ok": False, "why": llm_module.redact(exc), "model": "?"}
 
 
 def _graph_for_run():

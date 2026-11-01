@@ -305,6 +305,7 @@ def test_ask_page_warns_that_huggingface_needs_credits(monkeypatch):
     st.cache_resource.clear()
     monkeypatch.setenv("LLM_PROVIDER", "huggingface")
     monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.delenv("HF_MODEL", raising=False)                    # a real .env may set one; we want the default
     at = run_page("ask")
     assert not at.exception
     assert any("not free" in i.value.lower() and "$0" in i.value for i in at.info)

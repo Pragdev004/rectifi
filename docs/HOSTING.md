@@ -178,6 +178,8 @@ Tailscale may print a link to allow Funnel for your account; open it and approve
 
 To go back to private: `sudo tailscale serve reset`, then run the `serve` command again.
 
+**Funnel from your laptop (not the server).** On the server the password is always on. On your laptop it is not: the laptop app has no login unless you set `RECTIFI_PUBLIC=1`. So `tailscale funnel 8501` on the laptop would put your bank data on the internet for anyone with the link. Rectifi checks for this. If Funnel is on for the app and there is no login, `python scripts/dev.py up` refuses to start and `python scripts/dev.py doctor` fails with "Funnel is on: set RECTIFI_PUBLIC=1 and run `python scripts/dev.py set-password` first". Do that (put the two lines it prints, plus `RECTIFI_PUBLIC=1`, in `.env`), or switch Funnel off with `tailscale funnel reset`. The check reads `tailscale serve status --json`; if Tailscale is not installed or its answer looks different from what Rectifi expects, it stays quiet and does nothing. It has not been run against a real Tailscale install.
+
 ## Using it
 
 - The first time, the database is empty. Add accounts, then import a statement or add entries as on your laptop.

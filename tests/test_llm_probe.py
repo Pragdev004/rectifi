@@ -462,3 +462,33 @@ def test_the_fallback_is_the_message_with_keys_removed_and_cut_short(monkeypatch
     out = llm.explain_error(ValueError("boom with sk-live-abcdef123456 inside " + "x" * 600))
     assert "sk-live" not in out and out.startswith("boom with [key hidden] inside") and len(out) <= 300
     assert llm.explain_error(ValueError("boom")) == "boom"
+
+
+# ───────────── a connect timeout means "not running", never "loading" ─────────────
+
+def test_a_connect_timeout_is_ollama_not_running_not_a_loading_model(monkeypatch):
+    # Windows takes about 2 s to refuse a closed port, so httpx reports ConnectTimeout. A model that is still
+    # loading accepts the TCP connection first, so a connect timeout can only mean nothing is listening.
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    target = {"provider": "ollama", "base": "http://127.0.0.1:11434", "model": "m"}
+    run = llm._Run(target, "chat", 5)
+    r = llm._fail_http(run, "reachable", httpx.ConnectTimeout("timed out"))
+    hints = " ".join(r["hints"])
+    assert (r["ok"], r["stage"]) == (False, "reachable")
+    assert "ollama serve" in hints and "loads" not in hints and "loaded" not in hints
+    assert "Can't connect" in r["provider_message"]
+
+
+def test_a_read_timeout_is_still_a_loading_model(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    run = llm._Run({"provider": "ollama", "base": "http://127.0.0.1:11434", "model": "m"}, "chat", 5)
+    r = llm._fail_http(run, "reachable", httpx.ReadTimeout("slow"))
+    assert "loads" in " ".join(r["hints"]) and "ollama serve" not in " ".join(r["hints"])
+
+
+def test_explain_error_says_cant_reach_for_a_connect_timeout_and_keeps_the_slow_model_text(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    out = llm.explain_error(httpx.ConnectTimeout("timed out"))
+    assert "Can't reach Ollama" in out and "ollama serve" in out and "didn't answer" not in out
+    assert "didn't answer" in llm.explain_error(httpx.ReadTimeout("slow"))

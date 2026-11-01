@@ -222,3 +222,9 @@ def test_the_sandbox_runs_when_only_tmp_is_writable(tmp_path):
         pytest.skip("this environment does not allow mounts: " + done.stderr.strip()[:120])
     assert "RESULT True" in done.stdout, done.stdout + done.stderr
     assert "rectifi-mplcache" in done.stdout, done.stdout                      # fell back to the temp dir
+
+
+def test_killing_a_process_is_blocked():
+    blocked(run(PRELUDE + "matplotlib.os.kill(matplotlib.os.getpid(), 0)\n"), "os.kill")
+    blocked(run(PRELUDE + "matplotlib.os.killpg(matplotlib.os.getpgid(0), 0)\n"), "os.killpg")
+    blocked(run(PRELUDE + "matplotlib.backend_bases.signal.pthread_kill(1, 0)\n"), "signal.pthread_kill")

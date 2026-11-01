@@ -35,6 +35,7 @@ from langgraph.types import RetryPolicy, interrupt
 from pydantic import BaseModel, Field
 
 from .. import tools as core
+from ..money import parse_amount
 from ..privacy import mask_sensitive
 from . import memory as mem
 from .contracts import ChartInput, RagInput
@@ -414,7 +415,18 @@ def build_supervisor(*, checkpointer, store=None, agent_graph=None, agent_llm=No
         last_ai = next((m for m in reversed(messages) if isinstance(m, AIMessage) and text_of(m)), None)
         if last_ai is None:
             return {}
-        odd = [format(v, "f") for v in unverified_amounts(messages)]
+        kw = last_ai.additional_kwargs or {}
+        if kw.get("route") == "knowledge" and "unverified_claims" in kw:
+            # The tool results and the cited entries that back a figure live inside the RAG subgraph, out of sight here. Its own
+            # plain-code check (rag.graph._untraced, no model) already ran with them, so its list is the answer. Same text as wire.money().
+            odd = []
+            for item in kw.get("unverified_claims") or []:
+                try:
+                    odd.append(format(parse_amount(item), "f"))
+                except ValueError:
+                    odd.append(str(item))
+        else:
+            odd = [format(v, "f") for v in unverified_amounts(messages)]
         event = say("amounts", "unverified" if odd else "ok",
                     f"{len(odd)} figure(s) could not be traced" if odd else "no figure to trace, or every figure traced to your words or a tool")
         events = list(state.get("events") or []) + [event]

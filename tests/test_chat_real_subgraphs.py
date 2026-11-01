@@ -124,3 +124,23 @@ def test_a_chart_the_model_cannot_fix_says_why_instead_of_crashing(code_model):
     out = turn(make(real=True), tid(), "plot my spending")
     ai = last_ai(out)
     assert "artifact" not in ai.additional_kwargs and ai.content
+
+
+def test_a_figure_the_knowledge_tools_route_backed_is_not_flagged_but_a_made_up_one_is():
+    """The ToolMessage lives inside the RAG subgraph, so the supervisor's own check can't see it: it trusts the RAG graph's list."""
+    import re
+
+    from rectifi.agent.tools import spending_report
+
+    shown = spending_report.invoke({"period": "this_month"})
+    real = re.search(r"₹[\d,]+(?:\.\d\d)?", str(shown)).group(0)
+    call = AIMessage("", tool_calls=[{"name": "spending_report", "args": {"period": "this_month"}, "id": "c1"}])
+    chat = RuleModel(messages_script=[call, AIMessage(f"You spent {real} this month.")])
+    out = turn(make(real=True, grade=grader(), chat=chat), tid(), "how much did I spend this month?", mode="full", forced="knowledge")
+    kw = last_ai(out).additional_kwargs
+    assert kw["route"] == "knowledge" and kw["citations"][0]["source"] == "tool:spending_report"
+    assert kw["unverified_claims"] == [] and kw["unverified"] == []
+
+    chat = RuleModel(messages_script=[call, AIMessage("You spent ₹7,654,321.00 this month.")])
+    out = turn(make(real=True, grade=grader(), chat=chat), tid(), "how much did I spend this month?", mode="full", forced="knowledge")
+    assert last_ai(out).additional_kwargs["unverified"] == ["7654321.00"]
