@@ -67,7 +67,7 @@ def test_chat_new_stream_reload_resume_search_rename_delete(browser, live_server
     page, problems = new_page(browser, live_server, "desktop")
     page.goto("/ask")
     page.get_by_placeholder("Search conversations").wait_for()
-    assert page.get_by_text("Your conversations will be listed here.").is_visible()
+    page.get_by_text("Your conversations will be listed here.").wait_for()
 
     # new chat -> the answer streams in, with a time and a route stamp
     send(page, "spent 250 on swiggy")
