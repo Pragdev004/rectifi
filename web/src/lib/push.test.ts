@@ -70,7 +70,7 @@ describe("readEnv with a mocked navigator", () => {
 });
 
 describe("enablePush", () => {
-  function deps(permission: "default" | "granted" | "denied", key = { configured: true, public_key: "AQID" }) {
+  function deps(permission: "default" | "granted" | "denied", key: { configured: boolean; public_key: string | null } = { configured: true, public_key: "AQID" }) {
     const subscribe = vi.fn(async () => ({ toJSON: () => ({ endpoint: "https://fcm.googleapis.com/x", keys: { p256dh: "a", auth: "b" } }) }));
     const d: PushDeps & { calls: string[] } = {
       calls: [],

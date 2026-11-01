@@ -17,7 +17,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
-SHOTS = Path("/tmp/rectifi-web-shots")
+SHOTS = Path(os.getenv("RECTIFI_SHOTS_DIR") or "/tmp/rectifi-web-shots")   # RECTIFI_SHOTS_DIR: somewhere else (Windows has no /tmp)
 PINNED_TODAY = date(2026, 10, 21)          # a Wednesday, day 21 of 31
 
 PHONE = {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 2, "has_touch": True, "is_mobile": True}

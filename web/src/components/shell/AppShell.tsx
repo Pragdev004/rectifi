@@ -11,6 +11,7 @@ import { Dialog } from "../Dialog";
 import { Button, LinkButton, SegmentedControl } from "../forms";
 import { Eyebrow } from "../ui";
 import { isActive, MORE_ITEMS, NAV_GROUPS, PAGE_NAMES, type NavItem } from "./nav";
+import { UnreadChip } from "./UnreadChip";
 import styles from "./shell.module.css";
 
 // The page's own controls (month stepper, "New conversation") live in the top bar on a phone. Pages hand them over through this slot.
@@ -47,6 +48,7 @@ function NavLink({ item, path }: { item: NavItem; path: string }) {
     <Link href={item.to} className={styles.link} aria-current={isActive(path, item) ? "page" : undefined}>
       <Icon size={20} strokeWidth={1.5} aria-hidden="true" />
       <span>{item.label}</span>
+      {item.to === "/alerts" && <UnreadChip />}
     </Link>
   );
 }
@@ -146,6 +148,7 @@ function MoreSheet({ open, onClose, path }: { open: boolean; onClose: () => void
               <Link href={item.to} className={styles.link} aria-current={isActive(path, item) ? "page" : undefined} onClick={onClose}>
                 <item.icon size={20} strokeWidth={1.5} aria-hidden="true" />
                 <span>{item.label}</span>
+                {item.to === "/alerts" && <UnreadChip />}
               </Link>
             </li>
           ))}

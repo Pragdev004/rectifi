@@ -1,5 +1,5 @@
 import {
-  BookText, BookOpen, Brain, ChartColumn, ClipboardCheck, House, Landmark, Lightbulb, MessageSquare, PiggyBank, ScrollText, Smartphone,
+  BellRing, BookText, BookOpen, Brain, ChartColumn, ClipboardCheck, Droplets, House, Landmark, Lightbulb, MessageSquare, PiggyBank, ScrollText, Smartphone,
   type LucideIcon,
 } from "lucide-react";
 
@@ -18,6 +18,7 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { to: "/", label: "Overview", icon: House, also: ["/overview"] },
       { to: "/review", label: "Review", icon: ClipboardCheck },
       { to: "/insights", label: "Insights", icon: Lightbulb },
+      { to: "/alerts", label: "Alerts", icon: BellRing },
       { to: "/ask", label: "Ask", icon: MessageSquare },
     ],
   },
@@ -26,6 +27,7 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/ledger", label: "Ledger", icon: BookText },
       { to: "/charts", label: "Charts", icon: ChartColumn },
+      { to: "/leaks", label: "Leaks", icon: Droplets },
       { to: "/budgets", label: "Budgets", icon: PiggyBank },
       { to: "/accounts", label: "Accounts", icon: Landmark },
     ],
@@ -43,7 +45,7 @@ export const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
 
 /** What the phone's top bar says for each page. */
 export const PAGE_NAMES: Record<string, string> = {
-  "/": "Overview", "/overview": "Overview", "/review": "Review", "/insights": "Insights", "/ask": "Ask", "/add": "Add",
+  "/": "Overview", "/overview": "Overview", "/review": "Review", "/insights": "Insights", "/alerts": "Alerts", "/leaks": "Leaks", "/ask": "Ask", "/add": "Add",
   "/ledger": "Ledger", "/budgets": "Budgets", "/accounts": "Accounts", "/phone": "Phone",
   "/charts": "Charts", "/library": "Library", "/memory": "Memory", "/traces": "Traces", "/login": "Sign in",
 };
@@ -51,7 +53,9 @@ export const PAGE_NAMES: Record<string, string> = {
 export const MORE_ITEMS: NavItem[] = [
   { to: "/review", label: "Review", icon: ClipboardCheck },
   { to: "/insights", label: "Insights", icon: Lightbulb },
+  { to: "/alerts", label: "Alerts", icon: BellRing },
   { to: "/charts", label: "Charts", icon: ChartColumn },
+  { to: "/leaks", label: "Leaks", icon: Droplets },
   { to: "/budgets", label: "Budgets", icon: PiggyBank },
   { to: "/accounts", label: "Accounts", icon: Landmark },
   { to: "/phone", label: "Phone", icon: Smartphone },

@@ -11,7 +11,9 @@ import Add from "./pages/Add";
 import Budgets from "./pages/Budgets";
 import Ledger from "./pages/Ledger";
 import AskPage from "./pages/Ask";
+import AlertsPage from "./pages/Alerts";
 import InsightsPage from "./pages/Insights";
+import LeaksPage from "./pages/Leaks";
 import PhonePage from "./pages/Phone";
 import ReviewPage from "./pages/Review";
 import ChartsPage from "./pages/Charts";
@@ -46,6 +48,8 @@ function Pages() {
         <Route path="/overview" component={Overview} />
         <Route path="/review" component={ReviewPage} />
         <Route path="/insights" component={InsightsPage} />
+        <Route path="/alerts" component={AlertsPage} />
+        <Route path="/leaks" component={LeaksPage} />
         <Route path="/add" component={Add} />
         <Route path="/ledger" component={Ledger} />
         <Route path="/budgets" component={Budgets} />

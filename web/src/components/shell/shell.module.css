@@ -75,6 +75,20 @@
 }
 .link svg { flex: none; color: var(--c-muted); }
 .link[aria-current="page"] svg { color: var(--c-accent); }
+.unread {
+  margin-left: auto;
+  padding: 2px var(--s-2);
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--r-3);
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  font-size: var(--t-xs);
+  line-height: var(--t-xs-lh);
+  font-weight: 600;
+  white-space: nowrap;
+}
 .sideFoot { margin-top: auto; padding-top: var(--s-5); display: grid; gap: var(--s-3); }
 .modelLine { font-size: var(--t-xs); line-height: var(--t-xs-lh); color: var(--c-muted); padding: 0 var(--s-1); overflow-wrap: anywhere; }
 .themeLabel { padding: 0 var(--s-1); margin-bottom: var(--s-1); display: block; }

@@ -31,7 +31,7 @@ Note: PROGRESS.md says 455 passed; the brief says 487. The implementer must run 
 | Markdown in Ask | **A small in-house renderer** (`lib/markdown.tsx`): paragraphs, `**bold**`, `-`/`1.` lists, inline code. It builds React elements and never uses `dangerouslySetInnerHTML`. | XSS-safe by construction. The system prompt already forbids tables. |
 | Fonts | **@fontsource-variable/fraunces, @fontsource/ibm-plex-sans (400, 500, 600), @fontsource/ibm-plex-mono (400, 500)**. All are OFL 1.1, bundled by Vite into `dist/assets`, with `font-display: swap`. Copy the OFL texts into `web/public/licenses/`. | Self-hosted, so it works offline. The Streamlit app pulls Google Fonts today, which fails offline. |
 | Unit tests (web) | **vitest** (dev only) | Only for `money.ts` and `markdown.tsx`. |
-| Bundle budget | JS at most 150 KB gzipped in total, CSS at most 25 KB gzipped. Enforced by a test. | |
+| Bundle budget | JS at most 150 KB gzipped in total (raised to 165 KB when the alert pages landed), CSS at most 25 KB gzipped. Enforced by a test. | |
 
 ### A2. Folder layout
 

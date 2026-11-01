@@ -3,13 +3,13 @@ import { BellRing, Lightbulb, Send, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "wouter";
 import {
-  alertKeys, useAlerts, useDevices, usePatterns, usePrefs, usePresets, usePushKey, useRules,
+  useAlerts, useDevices, usePatterns, usePrefs, usePresets, usePushKey, useRules,
   type AlertItem, type AlertPrefs, type AlertRule, type Preset, type RulePeriod, type RuleScope,
 } from "../api/alerts";
 import { useChatStatus } from "../api/chat";
-import { ApiError, del, patch, post, put } from "../api/client";
+import { ApiError, del, get, patch, post, put } from "../api/client";
 import type { ExplainResult } from "../api/types";
-import { Button, Checkbox, Field, panelId, SegmentedControl, Select, Tabs, tabId, TextInput } from "../components/forms";
+import { Button, Checkbox, Field, LinkButton, panelId, SegmentedControl, Select, Tabs, tabId, TextInput } from "../components/forms";
 import { ExplainNote } from "../components/InsightRow";
 import { Loaded } from "../components/Loaded";
 import { ModelCheck } from "../components/ModelCheck";
@@ -130,7 +130,7 @@ function Inbox() {
       {(data) => {
         if (data.items.length === 0) {
           return (
-            <EmptyState title="No alerts yet." actions={<Button variant="primary" onClick={() => undefined} className={styles.hidden} aria-hidden="true" tabIndex={-1}>{""}</Button>}>
+            <EmptyState title="No alerts yet." actions={<LinkButton to="/alerts?tab=caps" variant="primary">Set a cap</LinkButton>}>
               Set a cap under Caps (try Swiggy for a week) and Rectifi will tell you here, and on your phone, when a payment brings you close to it.
             </EmptyState>
           );
@@ -142,7 +142,7 @@ function Inbox() {
               {data.unread > 0 && <Button variant="secondary" loading={readAll.isPending} loadingLabel="Saving…" onClick={() => readAll.mutate()}>Mark all read</Button>}
             </div>
             <ul className={styles.alerts}>{data.items.map((i) => <AlertRow key={i.id} item={i} explainOk={explainOk} />)}</ul>
-            {!explainOk && chat.data && <ModelCheck />}
+            {!explainOk && chat.data && <div className={styles.modelGap}><ModelCheck /></div>}
           </>
         );
       }}
@@ -383,12 +383,14 @@ function PhoneAlerts() {
   async function turnOn() {
     setBusy(true);
     try {
-      const result = await enablePush(browserDeps((path, body) => post<{ id: number }>(path, body), (path) => import("../api/client").then((c) => c.get(path))));
+      const result = await enablePush(browserDeps((path, body) => post<{ id: number }>(path, body), (path) => get<{ configured: boolean; public_key: string | null }>(path)));
       if (result.ok) {
         rememberSubscription(result.id);
         toast("Phone alerts are on.");
       } else if (result.reason === "no-key") {
         toast("Rectifi could not make its push key. See the message under the buttons.", "over");
+      } else {
+        toast("Notifications were not allowed, so alerts stay off.", "note");
       }
     } catch (e) {
       toast(message(e, "Could not turn alerts on."), "over");
@@ -419,7 +421,18 @@ function PhoneAlerts() {
     onSuccess: (r) => { toast(r.ok > 0 ? "Sent. Look at your phone." : "The push service did not accept it. Try again in a minute.", r.ok > 0 ? "ok" : "over"); refresh(); },
     onError: (e) => toast(message(e, "Could not send a test."), "over"),
   });
-  const remove = useMutation({ mutationFn: (id: number) => del(`/push/subscriptions/${id}`), onSuccess: () => { if (rememberedSubscription() === null) return; refresh(); }, onSettled: refresh, onError: (e) => toast(message(e, "That did not work."), "over") });
+  const remove = useMutation({
+    mutationFn: (id: number) => del(`/push/subscriptions/${id}`),
+    onSuccess: (_done, id) => {
+      // If this was the phone you are holding, also switch off its browser subscription so the page and the list agree.
+      if (rememberedSubscription() === id) {
+        rememberSubscription(null);
+        void disablePush().then(look, look);
+      }
+    },
+    onSettled: refresh,
+    onError: (e) => toast(message(e, "That did not work."), "over"),
+  });
 
   const words = state ? STATE_TEXT[state] : null;
   return (
@@ -482,7 +495,7 @@ function Settings({ prefs }: { prefs: AlertPrefs }) {
     <Section eyebrow="Settings">
       <form className={styles.settings} onSubmit={(e) => { e.preventDefault(); save.mutate(); }} aria-label="Alert settings">
         <Checkbox label="Send alerts to my phone" checked={form.push_on} onChange={(v) => set("push_on", v)} />
-        <Checkbox label="Private notifications (the phone only says {“}New spending alert{”}, no amounts or names)" checked={form.private_notifications} onChange={(v) => set("private_notifications", v)} />
+        <Checkbox label={<>Private notifications (the phone only says {"“"}New spending alert{"”"}, no amounts or names)</>} checked={form.private_notifications} onChange={(v) => set("private_notifications", v)} />
         <fieldset className={styles.pair}>
           <legend>Quiet hours</legend>
           <Field label="From">{(p) => <TextInput {...p} type="time" value={form.quiet_start} onChange={(e) => set("quiet_start", e.target.value)} />}</Field>
@@ -523,10 +536,10 @@ function Settings({ prefs }: { prefs: AlertPrefs }) {
 function Delivery() {
   const prefs = usePrefs();
   return (
-    <>
+    <div className={styles.stack}>
       <PhoneAlerts />
       <Loaded query={prefs} skeleton={<Skeleton height={240} />}>{(data) => <Settings prefs={data} />}</Loaded>
-    </>
+    </div>
   );
 }
 
@@ -544,7 +557,7 @@ export default function AlertsPage() {
         {tab === "caps" && <Caps />}
         {tab === "delivery" && <Delivery />}
       </div>
-      <p className={pages.muted}><Link href="/leaks">See where the month{"’"}s money went</Link></p>
+      <Link href="/leaks" className={pages.moreLink}>See where the month{"’"}s money went</Link>
     </>
   );
 }

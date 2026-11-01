@@ -92,7 +92,9 @@ def test_subject_comes_from_env_then_origin_then_fallback(monkeypatch):
 def test_key_is_created_once_with_private_permissions_and_reused(tmp_path):
     first = webpush.public_key_b64()
     path = tmp_path / ".rectifi" / webpush.KEY_FILE
-    assert path.exists() and stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert path.exists()
+    if os.name != "nt":                                                            # Windows has no 0600; the file sits in your own profile
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     webpush._reset_for_tests()
     assert webpush.public_key_b64() == first                                       # read back from the file
     assert len(webpush.key_fingerprint().split()) == 3

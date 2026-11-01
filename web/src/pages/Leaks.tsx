@@ -26,7 +26,7 @@ function projectionLine(r: LeakReport): string | null {
 }
 
 function LeaksBody({ data }: { data: LeakReport }) {
-  const noSpend = data.spent === "0.00";
+  const noSpend = data.segments.every((s) => s.kind !== "outflow" || s.count === 0); // counts of payments, not money
   if (noSpend) {
     return (
       <EmptyState title="No spending recorded for this month." actions={<LinkButton to="/add" variant="primary">Add an entry</LinkButton>}>
