@@ -97,7 +97,9 @@ def read_env_file() -> dict[str, str]:
 
 
 def setting(name: str, default: str = "") -> str:
-    return os.environ.get(name) or read_env_file().get(name) or default
+    """A variable that is set in the real environment wins, even when it is empty (like python-dotenv)."""
+    value = os.environ[name] if name in os.environ else read_env_file().get(name)
+    return value or default
 
 
 def database_url() -> str:

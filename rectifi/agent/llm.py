@@ -336,13 +336,16 @@ def _advice(code: int | None, message: str, provider: str) -> str | None:
 def _explain_error(exc: BaseException) -> str:
     provider = config.llm_provider()
     names = _class_names(exc)
-    if any("Timeout" in n for n in names) or isinstance(exc, TimeoutError):
+    # A connect timeout is a server that is not there (Windows takes about 2 s to refuse a closed port).
+    # A model that is still loading accepts the connection, so it is never a connect timeout.
+    never_connected = "ConnectTimeout" in names
+    if (any("Timeout" in n for n in names) or isinstance(exc, TimeoutError)) and not never_connected:
         if provider == "ollama":
             return (f"The model didn't answer within {config.ollama_timeout()} seconds. The first answer after Ollama starts can take "
                     "a minute or more on a laptop CPU while the model loads. Try again; if it keeps happening, use a smaller model "
                     "or raise OLLAMA_TIMEOUT in .env.")
         return f"The provider didn't answer in time ({REQUEST_TIMEOUT} seconds). Try again in a minute, or pick another model."
-    if names & {"ConnectError", "APIConnectionError", "ConnectionError", "ConnectionRefusedError"}:
+    if never_connected or names & {"ConnectError", "APIConnectionError", "ConnectionError", "ConnectionRefusedError"}:
         if provider == "ollama":
             base = config.ollama_base_url()
             return (f"Can't reach Ollama at {base}. Open the Ollama app (or run `ollama serve`). "
@@ -462,14 +465,17 @@ def _judge_tools(run: _Run, content: str, tool_calls: object, ms: int) -> dict |
 def _fail_http(run: _Run, stage: str, exc: Exception) -> dict:
     """A request that never got an answer: refused, timed out, or broken."""
     names = _class_names(exc)
-    if any("Timeout" in n for n in names):
+    # A connect timeout means nothing is listening (Windows is slow to refuse a closed port). A model that is
+    # still loading accepts the connection first, so this is "not running", not "loading".
+    not_connected = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+    if any("Timeout" in n for n in names) and not isinstance(exc, httpx.ConnectTimeout):
         if run.target["provider"] == "ollama":
             run.hints.append(f"No answer within {run.timeout:g} seconds. The first answer after Ollama starts can take a minute on a "
                              "laptop CPU while the model loads. Run the check again; once the model is loaded it is quick.")
         else:
             run.hints.append(f"No answer within {run.timeout:g} seconds. Check your internet connection, or try another model.")
         return run.result(stage, False, None, f"No answer within {run.timeout:g} seconds.")
-    if isinstance(exc, httpx.ConnectError):
+    if not_connected:
         base = run.target["base"]
         if run.target["provider"] == "ollama":
             run.hints.append(f"Ollama isn't answering at {base}. Open the Ollama app, or run `ollama serve`.")

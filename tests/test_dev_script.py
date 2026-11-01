@@ -81,6 +81,13 @@ def load_dev():
     return module
 
 
+def load_dev_for_up(monkeypatch):
+    """dev.py for cmd_up tests: never runs the real tailscale CLI (the funnel tests use funnel_dev)."""
+    dev_module = load_dev()
+    monkeypatch.setattr(dev_module, "funnel_without_login", lambda: False)
+    return dev_module
+
+
 def test_free_models_keeps_only_free_models_with_tools():
     dev_module = load_dev()
     assert dev_module.free_tool_models(FIXTURE_MODELS) == [("other/gamma:free", None), ("vendor/alpha:free", 131072)]
@@ -108,8 +115,23 @@ def test_free_models_prints_ids_and_the_env_hint(monkeypatch, capsys):
     assert "OPENROUTER_MODEL=" in out and "50 a day" in out
 
 
-def test_up_skips_docker_when_postgres_is_already_running(monkeypatch, capsys):
+def test_a_real_env_var_wins_over_the_file_even_when_empty(monkeypatch):
     dev_module = load_dev()
+    monkeypatch.setattr(dev_module, "read_env_file", lambda: {"SOME_SETTING": "from-file"})
+    monkeypatch.delenv("SOME_SETTING", raising=False)
+    assert dev_module.setting("SOME_SETTING", "d") == "from-file"          # not set: the file is used
+    monkeypatch.setenv("SOME_SETTING", "from-env")
+    assert dev_module.setting("SOME_SETTING", "d") == "from-env"
+    monkeypatch.setenv("SOME_SETTING", "")                                 # set but empty: still wins over the file
+    assert dev_module.setting("SOME_SETTING", "d") == "d"
+    assert dev_module.setting("SOME_SETTING") == ""
+    monkeypatch.delenv("SOME_SETTING")
+    monkeypatch.setattr(dev_module, "read_env_file", lambda: {})
+    assert dev_module.setting("SOME_SETTING", "d") == "d"
+
+
+def test_up_skips_docker_when_postgres_is_already_running(monkeypatch, capsys):
+    dev_module = load_dev_for_up(monkeypatch)
     calls = []
     monkeypatch.setattr(dev_module, "database_reachable", lambda: True)
     monkeypatch.setattr(dev_module, "cmd_db", lambda a: calls.append("db"))
@@ -122,7 +144,7 @@ def test_up_skips_docker_when_postgres_is_already_running(monkeypatch, capsys):
 
 
 def test_up_starts_docker_when_postgres_is_down(monkeypatch):
-    dev_module = load_dev()
+    dev_module = load_dev_for_up(monkeypatch)
     calls = []
     monkeypatch.setattr(dev_module, "database_reachable", lambda: False)
     monkeypatch.setattr(dev_module, "cmd_db", lambda a: calls.append("db"))
@@ -154,7 +176,8 @@ def test_doctor_openrouter_missing_model_and_never_prints_key():
 def test_doctor_openrouter_ready_and_huggingface_warns_about_credits():
     ok = dev("doctor", env={"LLM_PROVIDER": "openrouter", "OPENROUTER_API_KEY": "sk-or-x", "OPENROUTER_MODEL": "v/m:free"})
     assert "LLM: openrouter, model v/m:free, key is set" in ok.stdout
-    hf = dev("doctor", env={"LLM_PROVIDER": "huggingface", "HF_TOKEN": "hf_very_secret"})
+    hf = dev("doctor", env={"LLM_PROVIDER": "huggingface", "HF_TOKEN": "hf_very_secret",
+                                "HF_MODEL": ""})                        # a real .env may set one
     assert "hf_very_secret" not in hf.stdout + hf.stderr
     assert "not free" in hf.stdout and "$0" in hf.stdout and "DeepSeek-V3.1:cheapest" in hf.stdout
 
@@ -207,7 +230,7 @@ def test_gateway_is_off_unless_asked_for(monkeypatch, value, on):
 
 
 def test_up_does_not_start_the_gateway_by_default(monkeypatch):
-    dev_module = load_dev()
+    dev_module = load_dev_for_up(monkeypatch)
     started = []
     monkeypatch.setattr(dev_module, "database_reachable", lambda: True)
     monkeypatch.setattr(dev_module, "cmd_init", lambda a: None)
@@ -236,7 +259,7 @@ class FakeProcess:
 
 
 def test_up_starts_the_gateway_as_a_child_and_stops_it_when_the_app_ends(monkeypatch):
-    dev_module = load_dev()
+    dev_module = load_dev_for_up(monkeypatch)
     events, popen_calls, child = [], [], FakeProcess()
     monkeypatch.setattr(dev_module, "database_reachable", lambda: True)
     monkeypatch.setattr(dev_module, "cmd_init", lambda a: events.append("init"))
@@ -255,7 +278,7 @@ def test_up_starts_the_gateway_as_a_child_and_stops_it_when_the_app_ends(monkeyp
 
 
 def test_ctrl_c_in_the_app_still_stops_the_gateway(monkeypatch):
-    dev_module = load_dev()
+    dev_module = load_dev_for_up(monkeypatch)
     child = FakeProcess()
     monkeypatch.setattr(dev_module, "database_reachable", lambda: True)
     monkeypatch.setattr(dev_module, "cmd_init", lambda a: None)
@@ -274,7 +297,7 @@ def test_ctrl_c_in_the_app_still_stops_the_gateway(monkeypatch):
 
 
 def test_a_gateway_that_dies_at_once_does_not_stop_the_app(monkeypatch, capsys):
-    dev_module = load_dev()
+    dev_module = load_dev_for_up(monkeypatch)
     events = []
     monkeypatch.setattr(dev_module, "database_reachable", lambda: True)
     monkeypatch.setattr(dev_module, "cmd_init", lambda a: None)
@@ -362,7 +385,7 @@ def test_app_streamlit_flag_runs_streamlit_unchanged(monkeypatch):
 def test_up_with_streamlit_flag_reaches_cmd_app(monkeypatch):
     import argparse
 
-    dev_module = load_dev()
+    dev_module = load_dev_for_up(monkeypatch)
     seen = []
     monkeypatch.setattr(dev_module, "database_reachable", lambda: True)
     monkeypatch.setattr(dev_module, "cmd_init", lambda a: None)
