@@ -507,7 +507,7 @@ def set_budget(category: str, limit, month: str | date | None = None) -> dict:
             raise RectifiError("Budgets are for spending categories only.")
         conn.execute(
             """INSERT INTO budgets (category_id, month, limit_amount) VALUES (%s, %s, %s)
-               ON CONFLICT (category_id, month) DO UPDATE SET limit_amount = EXCLUDED.limit_amount""",
+               ON CONFLICT (user_id, category_id, month) DO UPDATE SET limit_amount = EXCLUDED.limit_amount""",
             (category_id, first, value),
         )
     return {"category": category, "month": first, "limit": value}
@@ -614,7 +614,7 @@ def record_balance(account: str | int, as_of: str | date, balance, source: str =
             raise RectifiError("Pick an account.")
         conn.execute(
             """INSERT INTO balance_snapshots (account_id, as_of, balance, source) VALUES (%s, %s, %s, %s)
-               ON CONFLICT (account_id, as_of) DO UPDATE SET balance = EXCLUDED.balance, source = EXCLUDED.source""",
+               ON CONFLICT (user_id, account_id, as_of) DO UPDATE SET balance = EXCLUDED.balance, source = EXCLUDED.source""",
             (account_id, when, value, source),
         )
     return {"account_id": account_id, "as_of": when, "balance": value}

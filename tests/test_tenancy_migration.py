@@ -102,8 +102,8 @@ def test_the_old_one_person_keys_are_gone():
             (list(db.TENANT_TABLES),)).fetchall()
         assert singles == []
         pks = c.execute("SELECT conrelid::regclass::text, pg_get_constraintdef(oid) FROM pg_constraint WHERE contype = 'p' AND conrelid::regclass::text IN "
-                        "('sms_seen', 'weekly_reviews', 'app_settings')").fetchall()
-        assert all("user_id" in row["pg_get_constraintdef"] for row in pks) and len(pks) == 3
+                        "('sms_seen', 'weekly_reviews', 'app_settings', 'budgets', 'balance_snapshots')").fetchall()
+        assert all("user_id" in row["pg_get_constraintdef"] for row in pks) and len(pks) == 5
 
 
 def test_a_second_run_changes_nothing():

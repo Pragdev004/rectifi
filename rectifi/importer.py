@@ -545,7 +545,7 @@ def import_rows(rows: list[StatementRow], account: str | int, filename: str | No
                 ).fetchone()
                 conn.execute(
                     """INSERT INTO balance_snapshots (account_id, as_of, balance, source) VALUES (%s, %s, %s, 'statement')
-                       ON CONFLICT (account_id, as_of) DO UPDATE SET balance = EXCLUDED.balance, source = 'statement'""",
+                       ON CONFLICT (user_id, account_id, as_of) DO UPDATE SET balance = EXCLUDED.balance, source = 'statement'""",
                     (account_id, as_of, balance),
                 )
                 changes.append({"as_of": as_of.isoformat(), "new_balance": str(balance),

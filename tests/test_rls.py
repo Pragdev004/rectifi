@@ -54,7 +54,7 @@ def test_user_id_is_required_and_defaults_to_the_current_person():
         cols = {r["table_name"]: (r["is_nullable"], r["column_default"]) for r in c.execute(
             "SELECT table_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'user_id'").fetchall()}
     assert set(cols) - {"user_sessions"} == set(db.TENANT_TABLES)          # user_sessions has a user_id too, but no default: sessions are made by connect_system
-    assert all(nullable == "NO" and "app_uid()" in (default or "") for nullable, default in cols.values())
+    assert all(nullable == "NO" and "app_uid()" in (default or "") for table, (nullable, default) in cols.items() if table != "user_sessions")
 
 
 def test_as_b_a_bare_select_star_returns_no_rows_of_a_in_any_table():

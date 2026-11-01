@@ -434,7 +434,8 @@ DO $$
 DECLARE r record;
 BEGIN
     FOR r IN SELECT * FROM (VALUES ('sms_seen', 'user_id, text_hash'), ('weekly_reviews', 'user_id, week_start'),
-                                   ('app_settings', 'user_id, key')) AS v(tbl, cols)
+                                   ('app_settings', 'user_id, key'), ('budgets', 'user_id, category_id, month'),
+                                   ('balance_snapshots', 'user_id, account_id, as_of')) AS v(tbl, cols)
     LOOP
         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = format('public.%I', r.tbl)::regclass AND contype = 'p'
                        AND pg_get_constraintdef(oid) LIKE 'PRIMARY KEY (user_id,%') THEN
