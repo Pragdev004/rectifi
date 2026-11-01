@@ -10,7 +10,7 @@ python-dotenv==1.2.3
 httpx==0.28.1
 
 # phone alerts (Web Push): our own VAPID signing uses cryptography; http-ece does the RFC 8291 message encryption
-cryptography==50.0.2
+cryptography==50.0.1
 http-ece==1.2.1
 
 # PDF statements (reads the PDF's own text layer; no OCR)
