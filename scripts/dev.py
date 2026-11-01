@@ -97,7 +97,9 @@ def read_env_file() -> dict[str, str]:
 
 
 def setting(name: str, default: str = "") -> str:
-    return os.environ.get(name) or read_env_file().get(name) or default
+    """A variable that is set in the real environment wins, even when it is empty (like python-dotenv)."""
+    value = os.environ[name] if name in os.environ else read_env_file().get(name)
+    return value or default
 
 
 def database_url() -> str:
@@ -302,7 +304,33 @@ def cmd_phone(_args) -> None:
     sys.exit(run(gateway_command(port), check=False))
 
 
+def login_is_on() -> bool:
+    """Same rule as rectifi.api.auth.login_required, read from env / .env so it works before anything is installed: a password
+    hash is set, RECTIFI_PUBLIC=1, or the bind host is not loopback."""
+    import ipaddress
+
+    if setting("RECTIFI_PASSWORD_HASH").strip() or setting("RECTIFI_PUBLIC").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    try:
+        return not ipaddress.ip_address(setting("RECTIFI_BIND_HOST").strip() or "127.0.0.1").is_loopback
+    except ValueError:
+        return False
+
+
+def funnel_without_login() -> bool:
+    """True when Tailscale Funnel publishes the app to the internet while Rectifi has no login. Quiet: False when Tailscale
+    is missing, not running or unreadable."""
+    if login_is_on():
+        return False
+    ts = load_tailscale_helpers()
+    return ts.read_funnel_exposes_app(ts.find_cli(), int(APP_PORT))
+
+
 def cmd_up(args) -> None:
+    if funnel_without_login():
+        sys.exit(f"Not starting: {load_tailscale_helpers().FUNNEL_MESSAGE}. "
+                 "(Funnel puts your bank data on the public internet; with no login anyone with the link can read it. "
+                 "Or turn it off: `tailscale funnel reset`.)")
     if database_reachable():
         say(f"Postgres is already running at {safe_target(database_url())}. (Docker not needed.)")
     else:
@@ -696,6 +724,10 @@ def cmd_doctor(_args) -> None:
         r.ok("Tailscale: installed and running (`python scripts/dev.py tailscale status` shows your https addresses)")
     else:
         r.warn("Tailscale is installed but not running or not signed in", "Open the Tailscale app and sign in. Only needed for phone access.")
+
+    if funnel_without_login():
+        r.fail("Tailscale Funnel is publishing the app to the internet and Rectifi has no login",
+               f"{ts.FUNNEL_MESSAGE}. Or turn Funnel off: `tailscale funnel reset`.")
 
     if web_is_built():
         r.ok("Web app is built (web/dist)")

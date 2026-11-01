@@ -373,3 +373,27 @@ def test_the_old_ask_routes_still_work_beside_the_chat(client, models, monkeypat
     events = ndjson(client.post(f"/api/ask/threads/{old}/messages", json={"text": "how much did I spend"}))
     assert [e["type"] for e in events] == ["done"] and events[0]["items"][1]["text"] == "Old path."
     assert client.get("/api/chat/threads").json()["threads"] == []                     # the alias does not touch the chat list
+
+
+def test_a_stopped_answer_with_a_made_up_figure_still_says_not_verified(client, models):
+    said = threading.Event()
+    release = threading.Event()
+
+    def pause(n):
+        if n == 3:
+            said.set()
+            release.wait(10)
+
+    models["agent"] = Streaming(script=[AIMessage("You spent ₹999 on food so far this month okay")], after=pause)
+    tid = new_thread(client)
+    out = {}
+    worker = threading.Thread(target=lambda: out.update(r=send(client, tid, "how much did I spend")))
+    worker.start()
+    assert said.wait(10)
+    make_client().post(f"/api/chat/threads/{tid}/stop", json={})
+    release.set()
+    worker.join(15)
+    reply = ndjson(out["r"])[-1]["items"][-1]
+    assert reply["stopped"] is True and "₹999" in reply["text"]
+    assert reply["unverified"] == ["999.00"]
+    assert client.get(f"/api/chat/threads/{tid}").json()["items"][-1]["unverified"] == ["999.00"]

@@ -188,7 +188,9 @@ def test_phone_pairing_shows_the_token_once(browser, live_server, kind):
     assert not problems, problems
 
 
-def test_phone_disables_the_download_with_a_reason_when_there_is_no_address(browser, live_server):
+def test_phone_disables_the_download_with_a_reason_when_there_is_no_address(browser, live_server, monkeypatch):
+    monkeypatch.setattr("rectifi.api.routes.phone.tailscale_info",                     # whatever this laptop's Tailscale says
+                        lambda: {"installed": False, "name": None, "app_published": False, "gateway_published": False})
     page, problems = new_page(browser, live_server, "desktop")
     page.goto("/phone")
     page.get_by_role("textbox", name="Phone name").fill("Tab")

@@ -116,13 +116,14 @@ def delete_memory(store, uid: str, key: str) -> bool:
 
 def forget_all(store, uid: str) -> int:
     count = 0
-    while True:                                  # search returns a page at a time
+    for _ in range(1000):                        # search returns a page at a time; the cap stops a store that never empties
         items = store.search(namespace(uid), limit=100)
         if not items:
             return count
         for i in items:
             store.delete(namespace(uid), i.key)
             count += 1
+    return count
 
 
 _REMEMBER = re.compile(r"(?is)^\s*(?:please\s+)?(?:remember|note|keep in mind)\b[\s,:-]*(?:that\s+)?(?P<fact>.+?)\s*$")

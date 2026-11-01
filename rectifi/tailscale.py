@@ -137,6 +137,35 @@ def read_served_ports(cli: str | None, runner: Callable = subprocess.run) -> set
     return served_ports(_run_json(serve_status_command(cli), runner)) if cli else set()
 
 
+FUNNEL_MESSAGE = "Funnel is on: set RECTIFI_PUBLIC=1 and run `python scripts/dev.py set-password` first"
+
+
+def funnel_exposes_app(serve_status: dict | None, app_port: int = APP_PORT) -> bool:
+    """True when `tailscale serve status --json` shows Funnel (the public internet) switched on for a web address that
+    proxies to the app port. Funnel keys are "host:port" in the "AllowFunnel" map; the target is that key's "Web" handler.
+    A shape this cannot read counts as "not funnel" (it never guesses), and nothing is logged."""
+    if not isinstance(serve_status, dict):
+        return False
+    allow, web = serve_status.get("AllowFunnel"), serve_status.get("Web")
+    if not isinstance(allow, dict) or not isinstance(web, dict):
+        return False
+    for key, on in allow.items():
+        if on is not True:
+            continue
+        handlers = (web.get(key) or {}).get("Handlers") if isinstance(web.get(key), dict) else None
+        for handler in handlers.values() if isinstance(handlers, dict) else ():
+            proxy = handler.get("Proxy") if isinstance(handler, dict) else None
+            port = proxy.rsplit(":", 1)[-1].split("/", 1)[0] if isinstance(proxy, str) else ""
+            if port.isdigit() and int(port) == app_port:
+                return True
+    return False
+
+
+def read_funnel_exposes_app(cli: str | None, app_port: int = APP_PORT, runner: Callable = subprocess.run) -> bool:
+    """False when Tailscale is not installed, not running or unreadable."""
+    return funnel_exposes_app(_run_json(serve_status_command(cli), runner), app_port) if cli else False
+
+
 def run_visible(command: list[str], runner: Callable = subprocess.run, timeout: float = 60.0) -> int:
     """Run a command with its output going straight to the terminal (Tailscale may print a link to enable HTTPS,
     or ask a question). Returns the exit code, or 127 if the program can't be started, or 124 on a timeout."""

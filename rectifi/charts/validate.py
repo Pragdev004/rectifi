@@ -42,8 +42,12 @@ FORBIDDEN_ATTRS = frozenset({
     "memmap", "ctypeslib", "system", "popen", "environ", "use",
     "loadtxt", "genfromtxt", "savetxt", "savez", "savez_compressed", "fromregex", "DataSource", "imread", "imsave",
     "switch_backend", "ion", "ioff", "ExcelFile", "ExcelWriter", "HDFStore", "io", "compat", "testing",
+    # modules the plotting libraries imported and left as attributes (matplotlib.os, calendar.sys.modules[...]) and what they offer
+    "os", "sys", "subprocess", "importlib", "modules", "builtins", "shutil", "pathlib", "tempfile", "inspect", "socket", "ctypes",
+    "signal", "kill", "killpg", "getppid", "listdir", "scandir", "walk", "FileIO", "getenv", "mro",
 })
-FORBIDDEN_ATTR_PREFIXES = ("read_", "load")          # read_csv, read_excel...; load_dataset downloads from the internet
+# read_csv, read_excel...; load_dataset downloads from the internet; f_back, gi_frame, cr_frame, ag_frame, tb_frame walk the call stack
+FORBIDDEN_ATTR_PREFIXES = ("read_", "load", "f_", "gi_", "cr_", "ag_", "tb_")
 
 # Keywords whose number is about layout, so it may be up to 1000.
 LAYOUT_KEYWORDS = frozenset({
