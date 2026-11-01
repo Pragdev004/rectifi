@@ -227,4 +227,4 @@ def test_the_sandbox_runs_when_only_tmp_is_writable(tmp_path):
 def test_killing_a_process_is_blocked():
     blocked(run(PRELUDE + "matplotlib.os.kill(matplotlib.os.getpid(), 0)\n"), "os.kill")
     blocked(run(PRELUDE + "matplotlib.os.killpg(matplotlib.os.getpgid(0), 0)\n"), "os.killpg")
-    blocked(run(PRELUDE + "import signal\nsignal.pthread_kill(signal.pthread_self(), 0)\n"), "signal.pthread_kill")
+    blocked(run(PRELUDE + "matplotlib.backend_bases.signal.pthread_kill(1, 0)\n"), "signal.pthread_kill")
