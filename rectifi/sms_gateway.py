@@ -33,12 +33,13 @@ from datetime import datetime, timedelta
 import psycopg
 from psycopg_pool import PoolTimeout
 from starlette.applications import Starlette
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from . import config, tools
+from . import alerts, config, tools
 from .db import DatabaseUnavailable, init_db
 
 log = logging.getLogger("rectifi.sms_gateway")
@@ -194,12 +195,16 @@ def create_app() -> Starlette:
         except Exception as exc:                       # never put the SMS or the token in a log line
             log.error("could not process an SMS (%s)", type(exc).__name__)
             return _reply(500, {"error": "internal error"})
-        return _reply(200, {"status": result["status"]})
+        reply = _reply(200, {"status": result["status"]})
+        if result["status"] == "added":                # a new payment: look for alerts after the phone has its answer
+            reply.background = BackgroundTask(alerts.sweep_and_deliver, "sms")
+        return reply
 
     @asynccontextmanager
     async def lifespan(app):
         try:
             await run_in_threadpool(init_db)
+            await run_in_threadpool(alerts.ensure_watermark)
         except DB_ERRORS:
             log.warning("The database is not reachable yet. /sms answers 503 (the phone retries) until it is.")
         if config.sms_host_is_open():

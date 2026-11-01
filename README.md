@@ -505,6 +505,42 @@ Two safety rules: an SMS from a plain phone number (a friend's chat) is ignored,
 - Limits: 8 KB per message, 60 messages a minute per phone, and repeated wrong tokens are slowed down.
 - Over Tailscale the traffic is encrypted twice (Tailscale's tunnel and HTTPS). With `RECTIFI_SMS_HOST=0.0.0.0` there is no HTTPS: on a shared network SMS text travels unencrypted. Do not do that on a network you do not trust.
 
+## Phone alerts
+
+Rectifi can tell you the moment a payment brings you close to a cap you set, as a normal notification on your Android phone. Example: "Swiggy: 80% of your weekly cap. You have spent ₹560 of ₹700 at Swiggy this week."
+
+How it works, in plain words:
+
+1. A bank SMS reaches Rectifi (auto-capture, **Add**, or an import).
+2. Fixed rules on your laptop check your caps and your monthly budgets. **No AI is involved.** Every rupee figure is worked out by code.
+3. If a cap is crossed (50%, 80% or 100%, only the highest new one), your laptop sends a short message through your phone's own push service (Google's for Chrome on Android). The message is encrypted, so the push service cannot read it.
+4. Your phone shows it. Tap it to open Rectifi on the **Alerts** page.
+
+Set it up once:
+
+1. Do the Tailscale setup in "Use Rectifi on your phone" above. Phone alerts need the **https://** address Tailscale gives you. A plain `http://` address will not work.
+2. On the phone, open that address in **Chrome**. Use the menu, **Add to Home screen**.
+3. Open **Alerts**, then **Delivery**, then press **Turn on phone alerts** and allow notifications. Nothing is asked before you press the button.
+4. Press **Send test**. A notification should appear on the phone.
+5. Open **Caps** and press a button like "Keep ₹800" next to Swiggy, or type your own cap. Your monthly budgets also raise alerts without any cap.
+
+Good to know:
+
+- **Too many alerts are a leak of their own.** Rectifi sends at most 3 an hour and 8 a day (you can change both), waits 6 hours before alerting the same cap again (a 100% alert ignores that), and holds alerts during **quiet hours** (10 pm to 7:30 am) and sends them as one message when they end. An import of many old payments gives one summary, not one alert each. Everything is still in the Inbox.
+- **Private notifications** make the phone say only "New spending alert", with no amounts or names.
+- **Leaks** shows where a month's money went as a waterfall (income, fixed bills, quick commerce, food delivery, shopping, small spends, what is left). **Today** at the top of Overview shows "Safe to spend today" and "Left today"; open "How this is worked out" to see the formula.
+- **Explain this** on an alert uses your Ask model if one is on. It only sees that alert's numbers, and a figure it invents is thrown away. Everything else works with no model.
+- The service worker (`sw.js`) only shows notifications. It never stores pages, so it cannot show you old figures.
+
+Honest limits:
+
+- **Never tested on a real phone.** It was tested with a fake push service and in a desktop browser. Whether Chrome on your phone gets the message when it was force-closed, or when battery saver is on, has not been checked.
+- **Alerts only arrive while Rectifi is running** on your laptop. If the laptop is off when an SMS arrives, nothing is sent then. Payments that are recorded later are caught up when Rectifi runs again, as one summary alert if they are more than two days old.
+- A tap on a notification needs your phone to reach the laptop over Tailscale. The notification itself can arrive without it.
+- Real UPI names differ: if a shop shows up under another name in your bank SMS, add it under **Alerts, Caps, Add a merchant name**.
+- iPhone is not supported or tested.
+- The push key lives in `.rectifi/` (not committed). If you delete it or set a new `RECTIFI_VAPID_PRIVATE_KEY`, turn alerts on again on each phone.
+
 ## The weekly review
 
 Open **Review** once a week. Sunday is a good day.

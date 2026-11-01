@@ -13,6 +13,7 @@ import { Money } from "../components/Money";
 import { PageHeader } from "../components/PageHeader";
 import { PaceChart } from "../components/PaceChart";
 import { ReconSlip } from "../components/ReconSlip";
+import { TodayStrip } from "../components/TodayStrip";
 import { MonthStepper } from "../components/Steppers";
 import { EmptyState, Section, Skeleton } from "../components/ui";
 import { monthLabel, monthName } from "../lib/dates";
@@ -193,6 +194,7 @@ export default function OverviewPage() {
         title={shown ? monthLabel(shown) : "Overview"}
         controls={meta.data && shown ? <MonthStepper value={shown} months={meta.data.months} onChange={(m) => setUrl({ month: m })} /> : undefined}
       />
+      <TodayStrip />
       <Loaded query={query} skeleton={<OverviewSkeleton />}>{(data) => <OverviewBody data={data} />}</Loaded>
     </>
   );

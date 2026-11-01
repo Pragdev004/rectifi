@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from starlette.routing import Route
 
-from ... import tools
+from ... import alerts, tools
 from ..errors import ApiError
 from ..inputs import api, date_field, int_field, money_field, path_int, query, text_field
 from .. import wire
@@ -68,6 +68,8 @@ def add_transaction(request, data):
     result = tools.add_transaction(amount, direction, when, payee=payee, category=category, account=account_id, note=note, **extra)
     if inbox_id is not None:
         tools.mark_inbox_added(inbox_id)
+    if result["status"] == "added":
+        alerts.kick("add")
     return {"status": result["status"], "transaction": wire.txn(result["transaction"])}
 
 
@@ -117,6 +119,8 @@ def sms_preview(request, data):
 @api(body=True)
 def sms_save(request, data):
     result = tools.save_pasted_sms(_sms_text(data))
+    if result["status"] == "added":
+        alerts.kick("paste")
     return {"status": result["status"], "transaction": wire.txn(result["transaction"])}
 
 

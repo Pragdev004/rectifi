@@ -1,0 +1,10 @@
+.projection { margin-top: var(--s-4); padding: var(--s-3) var(--s-4); background: var(--c-sunk); border-left: 3px solid var(--c-accent); border-radius: 0 var(--r-2) var(--r-2) 0; }
+.table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); line-height: var(--t-sm-lh); }
+.table th, .table td { padding: var(--s-2) var(--s-2); border-bottom: 1px solid var(--c-rule); text-align: right; vertical-align: top; }
+.table thead th { color: var(--c-muted); font-weight: 600; }
+.table th:first-child, .table td:first-child { text-align: left; }
+.table tbody th { font-weight: 600; }
+.group { display: block; color: var(--c-muted); font-weight: 400; font-size: var(--t-xs); line-height: var(--t-xs-lh); }
+@media (max-width: 479.98px) {
+  .table th, .table td { padding: var(--s-2) var(--s-1); }
+}

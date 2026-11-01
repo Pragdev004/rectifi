@@ -236,3 +236,63 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value       JSONB NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ───────────── leak alerts / real-time budget alerts (additive, safe to run again) ─────────────
+
+-- Merchant names you taught Rectifi, on top of the built-in list in rectifi/merchants.py.
+CREATE TABLE IF NOT EXISTS merchant_patterns (
+    id         SERIAL PRIMARY KEY,
+    pattern    TEXT UNIQUE NOT NULL CHECK (length(pattern) >= 3),
+    merchant   TEXT NOT NULL,
+    grp        TEXT NOT NULL CHECK (grp IN ('Quick commerce', 'Food delivery', 'Shopping', 'Other')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- A spending cap: "Swiggy at most 1,500 a week". scope says what target means (a merchant, a group, a category, or all spending).
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id            SERIAL PRIMARY KEY,
+    scope         TEXT NOT NULL CHECK (scope IN ('merchant', 'group', 'category', 'total')),
+    target        TEXT NOT NULL,
+    period        TEXT NOT NULL CHECK (period IN ('day', 'week', 'month')),
+    cap           NUMERIC(12,2) NOT NULL CHECK (cap > 0),
+    muted         BOOLEAN NOT NULL DEFAULT false,
+    snoozed_until TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (scope, target, period)
+);
+
+-- One row per alert. dedupe_key UNIQUE + ON CONFLICT DO NOTHING means the same alert is never stored (or pushed) twice.
+CREATE TABLE IF NOT EXISTS alerts (
+    id            SERIAL PRIMARY KEY,
+    dedupe_key    TEXT UNIQUE NOT NULL,
+    kind          TEXT NOT NULL,
+    severity      TEXT NOT NULL CHECK (severity IN ('act', 'watch', 'info')),
+    title         TEXT NOT NULL,
+    detail        TEXT NOT NULL,
+    push_title    TEXT NOT NULL,
+    push_body     TEXT NOT NULL,
+    numbers       JSONB NOT NULL,
+    rule_id       INT REFERENCES alert_rules(id) ON DELETE SET NULL,
+    txn_id        BIGINT REFERENCES transactions(id) ON DELETE SET NULL,
+    scope_key     TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    read_at       TIMESTAMPTZ,
+    push_state    TEXT NOT NULL DEFAULT 'pending' CHECK (push_state IN ('pending', 'sending', 'sent', 'held', 'skipped', 'failed')),
+    push_attempts INT NOT NULL DEFAULT 0,
+    pushed_at     TIMESTAMPTZ,
+    next_try_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_unread ON alerts (created_at DESC) WHERE read_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_alerts_push   ON alerts (push_state) WHERE push_state IN ('pending', 'held', 'failed');
+
+-- Phones that turned on alerts. endpoint is a capability URL: it is a secret, so it is never logged or returned by the API.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id         SERIAL PRIMARY KEY,
+    endpoint   TEXT UNIQUE NOT NULL,
+    p256dh     TEXT NOT NULL,
+    auth       TEXT NOT NULL,
+    label      TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_ok_at TIMESTAMPTZ,
+    fail_count INT NOT NULL DEFAULT 0
+);

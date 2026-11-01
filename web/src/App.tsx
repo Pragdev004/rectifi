@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { lazy, Suspense } from "react";
 import { Route, Switch } from "wouter";
 import { NetworkError } from "./api/client";
 import { AppShell } from "./components/shell/AppShell";
 import { ToastProvider } from "./components/Toast";
-import { EmptyState } from "./components/ui";
+import { EmptyState, Skeleton } from "./components/ui";
 import { LinkButton } from "./components/forms";
 import Overview from "./pages/Overview";
 import Accounts from "./pages/Accounts";
@@ -19,6 +20,19 @@ import LibraryPage from "./pages/Library";
 import LoginPage from "./pages/Login";
 import MemoryPage from "./pages/Memory";
 import TracesPage from "./pages/Traces";
+
+/** Alerts and Leaks load on first visit. If the chunk is gone (a rebuild), show a plain message, never a blank page. */
+function LoadFailed() {
+  return (
+    <EmptyState title="This page could not load." actions={<LinkButton to="/" variant="primary">Go to Overview</LinkButton>}>
+      Rectifi was updated while this tab was open. Reload the page.
+    </EmptyState>
+  );
+}
+const lazyPage = (load: () => Promise<{ default: React.ComponentType }>) =>
+  lazy(() => load().catch(() => ({ default: LoadFailed })));
+const AlertsPage = lazyPage(() => import("./pages/Alerts"));
+const LeaksPage = lazyPage(() => import("./pages/Leaks"));
 
 const client = new QueryClient({
   defaultOptions: {
@@ -41,11 +55,14 @@ function NotFound() {
 function Pages() {
   return (
     <AppShell>
+      <Suspense fallback={<Skeleton height={120} />}>
       <Switch>
         <Route path="/" component={Overview} />
         <Route path="/overview" component={Overview} />
         <Route path="/review" component={ReviewPage} />
         <Route path="/insights" component={InsightsPage} />
+        <Route path="/alerts" component={AlertsPage} />
+        <Route path="/leaks" component={LeaksPage} />
         <Route path="/add" component={Add} />
         <Route path="/ledger" component={Ledger} />
         <Route path="/budgets" component={Budgets} />
@@ -58,6 +75,7 @@ function Pages() {
         <Route path="/traces" component={TracesPage} />
         <Route><NotFound /></Route>
       </Switch>
+      </Suspense>
     </AppShell>
   );
 }
