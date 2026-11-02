@@ -60,7 +60,12 @@ def core_after_sign_in(ctx: userctx.UserContext) -> None:
 
 # ═══ WS-ALERTS: begin ═══
 def alerts_after_sign_in(ctx: userctx.UserContext) -> None:
-    """Catch up alerts on custom merchants (their caps are sealed, so they could not fire while signed out)."""
+    """Catch up alerts on custom merchants (their caps are sealed, so they could not fire while signed out), and open alert
+    texts that were sealed to the public key while the person was signed out. Quick: one read of the ledger. The alerts it
+    writes are pushed by the next tick."""
+    from . import alerts                                      # inside the function: rectifi.api must import without langchain
+
+    alerts.after_sign_in()
 # ═══ WS-ALERTS: end ═══
 
 
