@@ -18,9 +18,43 @@ log = logging.getLogger("rectifi.hooks")
 
 
 # ═══ WS-CORE: begin ═══
+CORE_SEALED_TXN = ("payee", "description", "raw_text", "note", "category_reason", "upi_ref_sealed")
+
+
 def core_after_sign_in(ctx: userctx.UserContext) -> None:
     """Open 'rs1.' values (sealed while signed out) into 'rx1.', and re-run categorise layers 1 to 4 on rows with
-    unlocked = false (never touching category_source = 'user')."""
+    unlocked = false (never touching category_source = 'user'). Then those rows are unlocked: the same as if the SMS had
+    arrived while signed in. Safe to run again: a second run finds nothing to do."""
+    from . import categorize, db, vault                      # inside the function: rectifi.api must import without langchain
+
+    if ctx.key is None:                                       # no key, nothing can be opened
+        return
+    with db.connect() as conn:
+        # 1. the needs-review inbox: sealed to the public key while signed out, now sealed to the data key
+        for row in conn.execute("SELECT id, sender, raw_text, reason FROM sms_inbox "
+                                "WHERE left(sender, 4) = 'rs1.' OR left(raw_text, 4) = 'rs1.' OR left(reason, 4) = 'rs1.'").fetchall():
+            conn.execute("UPDATE sms_inbox SET sender = %s, raw_text = %s, reason = %s WHERE id = %s",
+                         (vault.seal(row["sender"]), vault.seal(row["raw_text"]), vault.seal(row["reason"]), row["id"]))
+        # 2. payments that arrived signed out: amount, date, direction, brand and a first category were stored plain
+        rows = conn.execute("SELECT id, direction, category_source, " + ", ".join(CORE_SEALED_TXN) +
+                            " FROM transactions WHERE NOT unlocked ORDER BY id").fetchall()
+        if not rows:
+            return
+        cat = categorize.load_context(conn)                   # now with the person's learned rules and look-alike index
+        for row in rows:
+            sets = {col: vault.seal(row[col]) for col in CORE_SEALED_TXN if col != "category_reason"}
+            if row["category_source"] != "user":              # the person's own choice is never touched
+                why = categorize.decide_with(cat, row["payee"], row["description"], row["direction"])
+                suggested = cat.category_ids.get(why.suggested) if why.suggested else None
+                sets.update(category_id=cat.category_ids[why.category], category_source=why.source,
+                            category_confidence=why.confidence, category_reason=vault.seal(why.reason),
+                            suggested_category_id=suggested, suggested_confidence=why.suggested_confidence if suggested else None)
+            else:
+                sets["category_reason"] = vault.seal(row["category_reason"])
+            sets["unlocked"] = True
+            names = list(sets)
+            conn.execute("UPDATE transactions SET " + ", ".join(f"{n} = %s" for n in names) + " WHERE id = %s AND NOT unlocked",
+                         [sets[n] for n in names] + [row["id"]])
 # ═══ WS-CORE: end ═══
 
 
