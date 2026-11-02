@@ -4,6 +4,8 @@ The LLM agent, the Streamlit UI and the MCP server all call these same functions
 Nothing in this file talks to an LLM.
 """
 
+# Multi-user plan: this file is WS-CORE's, except the block between the WS-AI begin and end markers further down.
+
 from __future__ import annotations
 
 import calendar
@@ -321,7 +323,7 @@ def set_category(txn_id: int, category: str, remember: bool = False) -> dict:
         if remember and len(pattern) >= LEARN_MIN_KEY:
             conn.execute(
                 """INSERT INTO merchant_rules (pattern, category_id, source) VALUES (%s, %s, 'learned')
-                   ON CONFLICT (pattern) DO UPDATE SET category_id = EXCLUDED.category_id, source = 'learned'""",
+                   ON CONFLICT (user_id, pattern_blind) DO UPDATE SET category_id = EXCLUDED.category_id, source = 'learned'""",
                 (pattern, category_id),
             )
             learned = pattern
@@ -505,7 +507,7 @@ def set_budget(category: str, limit, month: str | date | None = None) -> dict:
             raise RectifiError("Budgets are for spending categories only.")
         conn.execute(
             """INSERT INTO budgets (category_id, month, limit_amount) VALUES (%s, %s, %s)
-               ON CONFLICT (category_id, month) DO UPDATE SET limit_amount = EXCLUDED.limit_amount""",
+               ON CONFLICT (user_id, category_id, month) DO UPDATE SET limit_amount = EXCLUDED.limit_amount""",
             (category_id, first, value),
         )
     return {"category": category, "month": first, "limit": value}
@@ -583,7 +585,7 @@ def add_account(name: str, last4: str | None = None) -> dict:
     with connect() as conn:
         row = conn.execute(
             """INSERT INTO accounts (name, last4) VALUES (%s, %s)
-               ON CONFLICT (name) DO UPDATE SET last4 = COALESCE(EXCLUDED.last4, accounts.last4)
+               ON CONFLICT (user_id, name) DO UPDATE SET last4 = COALESCE(EXCLUDED.last4, accounts.last4)
                RETURNING id, name, last4""",
             (name, last4),
         ).fetchone()
@@ -612,7 +614,7 @@ def record_balance(account: str | int, as_of: str | date, balance, source: str =
             raise RectifiError("Pick an account.")
         conn.execute(
             """INSERT INTO balance_snapshots (account_id, as_of, balance, source) VALUES (%s, %s, %s, %s)
-               ON CONFLICT (account_id, as_of) DO UPDATE SET balance = EXCLUDED.balance, source = EXCLUDED.source""",
+               ON CONFLICT (user_id, account_id, as_of) DO UPDATE SET balance = EXCLUDED.balance, source = EXCLUDED.source""",
             (account_id, when, value, source),
         )
     return {"account_id": account_id, "as_of": when, "balance": value}
@@ -873,7 +875,7 @@ def save_commitment(text: str, day: str | date | None = None) -> dict:
     with connect() as conn:
         conn.execute(
             """INSERT INTO weekly_reviews (week_start, commitment) VALUES (%s, %s)
-               ON CONFLICT (week_start) DO UPDATE SET commitment = EXCLUDED.commitment""",
+               ON CONFLICT (user_id, week_start) DO UPDATE SET commitment = EXCLUDED.commitment""",
             (start, text),
         )
     return {"week_start": start, "commitment": text}
@@ -1051,7 +1053,7 @@ def _to_inbox(device_id, sender, text, sent_at, digest, reason) -> dict:
     with connect() as conn:
         row = conn.execute(
             """INSERT INTO sms_inbox (device_id, sender, raw_text, sent_at, reason, text_hash)
-               VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (text_hash) DO NOTHING RETURNING id""",
+               VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, text_hash) DO NOTHING RETURNING id""",
             (device_id, sender, text, sent_at, reason, digest),
         ).fetchone()
     return {"status": "duplicate"} if row is None else {"status": "needs_review", "inbox_id": row["id"], "reason": reason}
@@ -1134,6 +1136,7 @@ def inbox_prefill(item_id: int) -> dict:
     return {**guess, "account_id": account_id, "raw_text": item["raw_text"], "inbox_id": item["id"]}
 
 
+# ═══ WS-AI: begin ═══   (classify, charts, conversations, traces, rag: the owner-only AI part; the rest of this file is WS-CORE)
 # ───────────────────────── next phase: one block per workstream ─────────────────────────
 # Edit only inside your own block. Nothing in this file talks to an LLM (CLAUDE.md rule 5).
 
@@ -1860,3 +1863,4 @@ def rag_status(embed_model: str) -> dict:
             "documents": {c: docs.get(c, 0) for c in ("guide", "note", "upload")}, "transactions": txns,
             "other_model_chunks": other, "updated_at": newest}
 # ═══ WS-RAG: end ═══
+# ═══ WS-AI: end ═══

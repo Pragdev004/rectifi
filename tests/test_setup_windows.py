@@ -52,6 +52,16 @@ def test_runs_the_database_bootstrap_with_stop_on_error():
     assert (ROOT / "db" / "init.sql").exists()
 
 
+def test_verifies_that_the_app_login_is_a_plain_role_after_the_bootstrap():
+    """Row level security is skipped by a superuser or BYPASSRLS role, so set-up checks the rectifi login really is plain."""
+    code = code_only()
+    check = code.index("rolsuper OR rolbypassrls")
+    assert code.index("db\\init.sql") < check < code.index("Python and packages")      # after the bootstrap, before the Python step
+    assert "-U', 'rectifi'" in code[check - 400:check] and "Stop-Setup 'The rectifi login is a superuser or has BYPASSRLS" in code
+    init_sql = (ROOT / "db" / "init.sql").read_text(encoding="utf-8")
+    assert "NOSUPERUSER NOBYPASSRLS" in init_sql
+
+
 def test_does_not_change_execution_policy_or_need_admin():
     code = code_only()
     assert "Set-ExecutionPolicy" not in code

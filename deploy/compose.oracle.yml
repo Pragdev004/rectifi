@@ -13,16 +13,23 @@ x-logging: &logging
 
 services:
   db:
+    # Two logins. `postgres` is the superuser: set-up and backups only (POSTGRES_PASSWORD). `rectifi` is the app's login, made on
+    # the first start by deploy/db-init/10-app-role.sh as a plain role (RECTIFI_DB_PASSWORD): no superuser, no BYPASSRLS.
+    # Postgres skips row level security, the privacy check between people, for a superuser, so the app must not be one.
+    # The init script runs only when the volume is new. A volume made by an older version keeps its old superuser login:
+    # the app refuses to start in multi-user or public mode until you recreate it (docs/HOSTING.md).
     image: postgres:16-bookworm
     restart: unless-stopped
     environment:
-      POSTGRES_USER: rectifi
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.deploy}
       POSTGRES_DB: rectifi
+      RECTIFI_DB_PASSWORD: ${RECTIFI_DB_PASSWORD:?set RECTIFI_DB_PASSWORD in .env.deploy}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rectifi -d rectifi"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d rectifi"]      # -h 127.0.0.1: the start-up server has no TCP port, so this waits for the init script
       interval: 5s
       timeout: 3s
       retries: 20
@@ -66,7 +73,7 @@ services:
     restart: unless-stopped
     env_file: ../.env.deploy
     environment:
-      DATABASE_URL: postgresql://rectifi:${POSTGRES_PASSWORD}@db:5432/rectifi
+      DATABASE_URL: postgresql://rectifi:${RECTIFI_DB_PASSWORD}@db:5432/rectifi
       LLM_PROVIDER: ollama
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${RECTIFI_MODEL_CHAT:-qwen2.5:3b}
@@ -99,6 +106,7 @@ services:
 
   backup:
     # A copy of the database every day, kept for 7 days, in ${BACKUP_DIR} on the server. Restore steps: docs/HOSTING.md.
+    # It logs in as `postgres`: pg_dump as the plain app role would fail on the tables that row level security forces.
     image: postgres:16-bookworm
     restart: unless-stopped
     environment:
@@ -110,7 +118,7 @@ services:
       - |
         while true; do
           f=/backups/rectifi-$$(date +%F).dump
-          if pg_dump -h db -U rectifi -Fc rectifi > "$$f.tmp"; then mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; echo "backup failed"; fi
+          if pg_dump -h db -U postgres -Fc rectifi > "$$f.tmp"; then mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; echo "backup failed"; fi
           ls -1t /backups/rectifi-*.dump 2>/dev/null | tail -n +8 | xargs -r rm -f
           sleep 86400
         done

@@ -1,20 +1,27 @@
 # Postgres for Rectifi. Start it with:  docker compose up -d   (or: python scripts/dev.py db)
+#
+# Two logins, on purpose:
+#   postgres  the superuser. Only for set-up and backups. The app never logs in as this.
+#   rectifi   the app's login: a plain role (no superuser, no BYPASSRLS), made by db/init.sql. Postgres skips row level
+#             security, the privacy check between people, for a superuser, so the app must not be one.
+# An older volume made with POSTGRES_USER: rectifi keeps that superuser login. Recreate it (docker compose down -v, which
+# deletes the data: export first). Until then a multi-user or public start refuses, and `dev.py doctor` warns.
 services:
   db:
     image: pgvector/pgvector:pg16        # normal Postgres 16 plus the vector extension we will want later
     container_name: rectifi-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: rectifi
-      POSTGRES_PASSWORD: rectifi_dev     # dev password; the port below is only open to this laptop
-      POSTGRES_DB: rectifi
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_dev    # dev password; the port below is only open to this laptop
+      POSTGRES_DB: postgres              # db/init.sql makes the rectifi, rectifi_test and rectifi_demo databases, owned by rectifi
     ports:
       - "127.0.0.1:5432:5432"            # 127.0.0.1 = reachable from this laptop only, not from your Wi-Fi
     volumes:
       - rectifi_pgdata:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro   # makes rectifi_test and rectifi_demo on first start
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro   # makes the rectifi login and the three databases on first start
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rectifi -d rectifi"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]    # -h 127.0.0.1: the start-up server has no TCP port, so this waits for init.sql to finish
       interval: 5s
       timeout: 3s
       retries: 10

@@ -370,6 +370,17 @@ function Invoke-Main {
     if ($probe.ExitCode -eq 0) { Write-Ok 'The rectifi login can connect' }
     else { Write-Bad 'The rectifi login could not connect. If you changed its password earlier, put the new one in DATABASE_URL in .env.' }
 
+    # Row level security (the privacy checks between people) is skipped silently by a superuser or a BYPASSRLS role.
+    # db\init.sql makes rectifi a plain role; this checks that it really is one.
+    if ($probe.ExitCode -eq 0) {
+        $roleCheck = Invoke-Psql $psql @('-X', '-w', '-h', 'localhost', '-p', "$Port", '-U', 'rectifi', '-d', 'rectifi', '-tA', '-c', 'SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user') $AppDbPassword
+        if ($roleCheck.ExitCode -eq 0 -and "$($roleCheck.Output)".Trim() -eq 'f') { Write-Ok 'The rectifi login is a plain role (row level security applies to it)' }
+        else {
+            Stop-Setup 'The rectifi login is a superuser or has BYPASSRLS, so the privacy checks between people would be skipped.' @(
+                'Run db\init.sql again as the postgres user: it takes those rights away. Then run this script again.')
+        }
+    }
+
     # ---- c. Python and packages --------------------------------------------------------------
     Write-Step 'Python and packages'
     $venvPython = Get-VenvPython

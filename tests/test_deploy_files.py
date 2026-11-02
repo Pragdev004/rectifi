@@ -178,14 +178,15 @@ def test_compose_config_accepts_the_file(tmp_path, stand_in_env_deploy):
     if not docker:
         pytest.skip("docker is not installed")
     env = tmp_path / "env"
-    env.write_text("RECTIFI_HOSTNAME=r.tail1.ts.net\nPOSTGRES_PASSWORD=abc123abc123abc123\n")
+    env.write_text("RECTIFI_HOSTNAME=r.tail1.ts.net\nPOSTGRES_PASSWORD=abc123abc123abc123\nRECTIFI_DB_PASSWORD=def456def456def456\n")
     result = subprocess.run([docker, "compose", "--env-file", str(env), "-f", str(COMPOSE), "config", "--format", "json"],
                             capture_output=True, text=True, cwd=ROOT)
     assert result.returncode == 0, result.stderr
     import json
     rendered = json.loads(result.stdout)
     app = rendered["services"]["app"]
-    assert app["environment"]["DATABASE_URL"] == "postgresql://rectifi:abc123abc123abc123@db:5432/rectifi"
+    assert app["environment"]["DATABASE_URL"] == "postgresql://rectifi:def456def456def456@db:5432/rectifi"     # the app logs in as rectifi, not as postgres
+    assert rendered["services"]["db"]["environment"]["POSTGRES_USER"] == "postgres"
     assert app["environment"]["RECTIFI_ALLOWED_HOSTS"] == "r.tail1.ts.net,localhost,127.0.0.1"
     assert [p["host_ip"] for p in app["ports"]] == ["127.0.0.1"]
 
@@ -193,7 +194,7 @@ def test_compose_config_accepts_the_file(tmp_path, stand_in_env_deploy):
 def test_deploy_check_runs_compose_on_the_default_env_file(stand_in_env_deploy, capsys):
     if not shutil.which("docker"):
         pytest.skip("docker is not installed")
-    stand_in_env_deploy.write_text("RECTIFI_HOSTNAME=r.tail1.ts.net\nPOSTGRES_PASSWORD=abc123abc123abc123\n")
+    stand_in_env_deploy.write_text("RECTIFI_HOSTNAME=r.tail1.ts.net\nPOSTGRES_PASSWORD=abc123abc123abc123\nRECTIFI_DB_PASSWORD=def456def456def456\n")
     rep = deploy.Report()
     deploy.check_compose(rep, ROOT, stand_in_env_deploy)
     assert rep.failures == 0, capsys.readouterr().out
@@ -232,7 +233,8 @@ def test_env_deploy_example_has_no_real_values_and_covers_the_compose_variables(
     assert values["RECTIFI_SESSION_SECRET"] in ("", None)
     assert values["RECTIFI_HOSTNAME"].endswith(".ts.net")
     compose_text = COMPOSE.read_text()
-    for name in ("RECTIFI_HOSTNAME", "POSTGRES_PASSWORD"):
+    assert values["RECTIFI_DB_PASSWORD"] in ("", None)
+    for name in ("RECTIFI_HOSTNAME", "POSTGRES_PASSWORD", "RECTIFI_DB_PASSWORD"):
         assert name in compose_text and name in values
 
 

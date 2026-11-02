@@ -157,7 +157,7 @@ def add_pattern(pattern: str, merchant: str, group: str) -> dict:
     with connect() as conn:
         row = conn.execute(
             "INSERT INTO merchant_patterns (pattern, merchant, grp) VALUES (%s, %s, %s) "
-            "ON CONFLICT (pattern) DO UPDATE SET merchant = EXCLUDED.merchant, grp = EXCLUDED.grp "
+            "ON CONFLICT (user_id, pattern_blind) DO UPDATE SET merchant = EXCLUDED.merchant, grp = EXCLUDED.grp "
             "RETURNING id, pattern, merchant, grp AS \"group\", created_at",
             (text, name, group),
         ).fetchone()

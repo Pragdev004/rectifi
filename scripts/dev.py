@@ -158,8 +158,20 @@ def cmd_db(_args) -> None:
     say(f"Postgres is ready at {safe_target(database_url())}.")
 
 
+INIT_SNIPPET = """
+import sys
+from rectifi.db import TenancyMigrationNeeded, UnsafeDatabaseRole, init_db
+try:
+    init_db()
+except (TenancyMigrationNeeded, UnsafeDatabaseRole) as exc:
+    sys.exit(str(exc))
+print('Tables are ready.')
+"""
+
+
 def cmd_init(_args) -> None:
-    run([project_python(), "-c", "from rectifi.db import init_db; init_db(); print('Tables are ready.')"])
+    """Creates the tables. An older database is NOT upgraded here (unless it is a *_test or *_demo one): see `dev.py migrate-tenancy`."""
+    run([project_python(), "-c", INIT_SNIPPET])
 
 
 def streamlit_env() -> dict[str, str]:
@@ -641,6 +653,20 @@ except psycopg.Error as exc:
 """
 
 
+CHECK_TENANCY = """
+import json
+from rectifi import db
+try:
+    with db.connect_system("doctor") as conn:
+        old = db._tables_before_tenancy(conn)
+        problems = db.role_problems(conn)
+except Exception as exc:
+    print(json.dumps({"error": type(exc).__name__}))
+else:
+    print(json.dumps({"old": old, "problems": problems}))
+"""
+
+
 class Report:
     def __init__(self) -> None:
         self.failed = False
@@ -689,6 +715,24 @@ def cmd_doctor(_args) -> None:
     code, _ = _quiet([py, "-c", CHECK_DB])
     if code == 0:
         r.ok(f"Database reachable at {safe_target(url)}")
+        _code, out = _quiet([py, "-c", CHECK_TENANCY])
+        try:
+            tenancy = json.loads(out.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            tenancy = {"error": "unreadable"}
+        if "error" in tenancy:
+            r.warn(f"Could not check the database role and layout ({tenancy['error']})", "Run `python scripts/dev.py doctor` again once the database is up.")
+        else:
+            if tenancy["old"]:
+                r.warn(f"The database was made before multi-user support ({len(tenancy['old'])} tables need a one-time upgrade); the app will not start until it is done",
+                       "Back it up, then run `python scripts/dev.py migrate-tenancy` (it asks you to type yes first).")
+            else:
+                r.ok("Database layout: per-person rows (multi-user ready)")
+            for problem in tenancy["problems"]:
+                r.warn(problem, "Use a plain login role. Docker: recreate the volume with the current docker-compose.yml; native: run db/init.sql as postgres. "
+                                "Multi-user and public mode refuse to start with this role.")
+            if not tenancy["problems"]:
+                r.ok("Database login is a plain role (row level security applies)")
     else:
         r.fail(f"Can't reach the database at {safe_target(url)}", "Run `python scripts/dev.py db` (Docker), or start your own Postgres and check DATABASE_URL in .env.")
 
@@ -758,7 +802,7 @@ def cmd_doctor(_args) -> None:
 
 # ───────────────────────── commands that live in scripts/devtools/*.py ─────────────────────────
 
-DEVTOOL_MODULES = ("models", "deploy")      # models.py: WS-LLM. deploy.py: WS-HOST.
+DEVTOOL_MODULES = ("models", "deploy", "users")      # models.py: WS-LLM. deploy.py: WS-HOST. users.py: migrate-tenancy now; invites with WS-AUTH.
 
 
 def load_devtool(name: str):

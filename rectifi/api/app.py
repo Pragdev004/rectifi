@@ -23,7 +23,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .. import config
-from ..db import init_db
+from ..db import TenancyMigrationNeeded, UnsafeDatabaseRole, init_db
 from .errors import DB_ERRORS, EXCEPTION_HANDLERS
 from .routes import (accounts, alerts as alerts_routes, ask, auth, budgets, charts, chat, classify, imports, insights, knowledge, memory, meta, models,
                      overview, phone, review, traces, transactions)
@@ -56,6 +56,8 @@ def api_routes() -> list[Route]:
     for module in (meta, overview, review, insights, transactions, imports, budgets, accounts, phone, ask,
                    classify, charts, chat, memory, traces, models, auth, knowledge, alerts_routes):
         found += module.routes
+    # ═══ WS-ACCOUNT: begin ═══   (account export and delete, /api/privacy)
+    # ═══ WS-ACCOUNT: end ═══
     return found
 
 
@@ -98,6 +100,7 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
             return PlainTextResponse("Not found", status_code=404)
         return FileResponse(path, media_type="text/javascript", headers={"Cache-Control": "no-cache"})
 
+    # ═══ WS-ALERTS: begin ═══   (the ticker: a task that calls alerts.tick every minute)
     async def alert_ticker() -> None:
         """Every minute: catch payments that arrived without a hook, release alerts held overnight, the digest, retries."""
         from .. import alerts
@@ -110,6 +113,7 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
                 raise
             except Exception as exc:                                # noqa: BLE001  (log the type only; the loop must go on)
                 log.error("alerts tick failed (%s)", type(exc).__name__)
+    # ═══ WS-ALERTS: end ═══
 
     @asynccontextmanager
     async def lifespan(app):
@@ -117,10 +121,14 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
         ticker = None
         try:
             await run_in_threadpool(init_db)
+        except (TenancyMigrationNeeded, UnsafeDatabaseRole) as exc:
+            log.error("%s", exc)                    # the server does not start; the message above says what to do
+            raise
         except DB_ERRORS:
             log.warning("The database is not reachable yet. /api answers 503 until it is, then recovers on its own.")
         else:
             await run_in_threadpool(_start_background_work)
+            # ═══ WS-ALERTS: begin ═══   (start the ticker)
             if not os.getenv("RECTIFI_NO_ALERT_BACKGROUND"):
                 from .. import alerts
 
@@ -129,15 +137,18 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
                 except DB_ERRORS:
                     pass
                 ticker = asyncio.create_task(alert_ticker())
+            # ═══ WS-ALERTS: end ═══
         try:
             yield
         finally:
+            # ═══ WS-ALERTS: begin ═══   (stop the ticker)
             if ticker is not None:
                 ticker.cancel()
                 try:
                     await ticker
                 except asyncio.CancelledError:
                     pass
+            # ═══ WS-ALERTS: end ═══
 
     routes = [
         Mount("/api", routes=api_routes()),

@@ -52,7 +52,7 @@ def pytest_sessionstart(session):
         pytest.exit(f"Refusing to run: the test database must end in '_test' (got {dbname!r}). "
                     "Tests delete every table, so they must never point at real data.", returncode=2)
     try:
-        psycopg.connect(TEST_URL, connect_timeout=3).close()
+        probe = psycopg.connect(TEST_URL, connect_timeout=3)
     except psycopg.OperationalError:
         pytest.exit(
             f"Can't reach the test database at {_target(TEST_URL)}.\n"
@@ -61,11 +61,20 @@ def pytest_sessionstart(session):
             "Check the setup with:  python scripts/dev.py doctor",
             returncode=2,
         )
+    # Row level security is skipped silently by a superuser or a BYPASSRLS role, which would make every isolation test pass
+    # for the wrong reason. So a test run on such a role stops here (decision D11).
+    with probe:
+        role = probe.execute("SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user").fetchone()
+    if role[1] or role[2]:
+        pytest.exit(f"Refusing to run: the test login {role[0]!r} is a superuser or has BYPASSRLS, so row level security would not "
+                    "apply and the isolation tests would prove nothing. Use the plain 'rectifi' role from db/init.sql "
+                    "(docker-compose.yml now makes it that way: recreate the volume if yours is old).", returncode=2)
 
 
 @pytest.fixture(autouse=True)
 def fresh_db(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", TEST_URL)
+    monkeypatch.delenv("RECTIFI_MULTIUSER", raising=False)     # laptop mode unless a test turns multi-user on
     with psycopg.connect(TEST_URL, autocommit=True) as conn:
         tables = [r[0] for r in conn.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").fetchall()]
         if tables:

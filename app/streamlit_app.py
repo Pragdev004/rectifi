@@ -28,7 +28,7 @@ from theme import chip, esc, inject_css, tok  # noqa: E402
 
 from rectifi.categorize import FALLBACK_EXPENSE  # noqa: E402
 from rectifi import config, forwarder_config, insights, sms_gateway, tailscale, tools  # noqa: E402
-from rectifi.db import DatabaseUnavailable, init_db  # noqa: E402
+from rectifi.db import DatabaseUnavailable, TenancyMigrationNeeded, UnsafeDatabaseRole, init_db  # noqa: E402
 from rectifi.importer import assess_statement, import_rows, normalise, read_table  # noqa: E402
 from rectifi.money import fmt_inr, parse_amount  # noqa: E402
 from rectifi.parsing import parse_sms  # noqa: E402
@@ -59,6 +59,12 @@ def db_down(exc: Exception) -> None:
         "Start it with <code>python scripts/dev.py db</code> (Docker), or check <code>DATABASE_URL</code> in "
         "<code>.env</code>. Then reload this page. <code>python scripts/dev.py doctor</code> shows what is wrong.",
     )
+
+
+def start_refused(exc: Exception) -> None:
+    """The database needs the owner's OK before it is changed (or the login role is unsafe). Nothing has been changed."""
+    st.title("Rectifi needs one step before it can start")
+    st.error(str(exc), icon=":material/lock:")
 
 
 def months_back(n: int = 12) -> list[date]:
@@ -1325,3 +1331,5 @@ try:
     st.navigation(list(PAGES.values()), position="sidebar").run()
 except (DatabaseUnavailable, psycopg.OperationalError, PoolTimeout) as exc:
     db_down(exc)
+except (TenancyMigrationNeeded, UnsafeDatabaseRole) as exc:
+    start_refused(exc)

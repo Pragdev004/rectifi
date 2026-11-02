@@ -231,7 +231,7 @@ def bump_epoch() -> int:
     with connect() as conn:
         row = conn.execute(
             "INSERT INTO app_settings (key, value) VALUES (%s, '1'::jsonb) "
-            "ON CONFLICT (key) DO UPDATE SET value = to_jsonb(COALESCE((app_settings.value #>> '{}')::int, 0) + 1), updated_at = now() "
+            "ON CONFLICT (user_id, key) DO UPDATE SET value = to_jsonb(COALESCE((app_settings.value #>> '{}')::int, 0) + 1), updated_at = now() "
             "RETURNING value", (EPOCH_KEY,)).fetchone()
     return int(row["value"])
 
@@ -290,7 +290,7 @@ class LoginLimiter:
             with connect() as conn:
                 conn.execute(
                     "INSERT INTO app_settings (key, value) VALUES (%s, %s::jsonb) "
-                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                    "ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
                     (LOCK_KEY, json.dumps({"failures": self._failures, "locked_until": self._locked_until})))
         except Exception:
             pass
