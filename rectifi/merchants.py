@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from . import merchant_allowlist, vault
 from .categorize import merchant_key
 from .db import connect
 from .tools import RectifiError
@@ -71,6 +72,52 @@ REGISTRY: tuple[tuple[str, str, str], ...] = (
     ("nykaa", "Nykaa", SHOPPING),
 )
 
+# Every brand on the allow-list (rectifi/merchant_allowlist.py, plan D3), so a payment that carries only the plain
+# `transactions.merchant_key` (it arrived while its owner was signed out and its payee is still sealed) still has a merchant
+# and a group. key -> (merchant name, group). The names are the ones above; 'instamart' is 'Swiggy Instamart'.
+BRANDS: dict[str, tuple[str, str]] = {
+    "instamart": ("Swiggy Instamart", QUICK), "swiggy": ("Swiggy", FOOD), "zomato": ("Zomato", FOOD),
+    "blinkit": ("Blinkit", QUICK), "zepto": ("Zepto", QUICK), "bigbasket": ("BigBasket", QUICK),
+    "jiomart": ("JioMart", QUICK), "dominos": ("Domino's", FOOD), "eatsure": ("EatSure", FOOD),
+    "amazon": ("Amazon", SHOPPING), "flipkart": ("Flipkart", SHOPPING), "myntra": ("Myntra", SHOPPING),
+    "ajio": ("Ajio", SHOPPING), "meesho": ("Meesho", SHOPPING), "nykaa": ("Nykaa", SHOPPING),
+    "uber": ("Uber", OTHER), "ola": ("Ola", OTHER), "rapido": ("Rapido", OTHER), "irctc": ("IRCTC", OTHER),
+    "bookmyshow": ("BookMyShow", OTHER), "pvr": ("PVR", OTHER), "netflix": ("Netflix", OTHER),
+    "spotify": ("Spotify", OTHER), "hotstar": ("Hotstar", OTHER),
+}
+PLAIN_NAMES: frozenset[str] = frozenset(name for name, _ in BRANDS.values())
+
+
+def _allow_list_patterns() -> tuple[tuple[str, str, str], ...]:
+    """Registry rows for the allow-listed brands the list above does not name yet. They match the way the allow-list does
+    (a name of four letters or fewer must be a whole word, so 'ola' is not 'olam'): a short pattern is padded with spaces."""
+    have = {name for _, name, _ in REGISTRY}
+    out = []
+    for brand in merchant_allowlist.ALLOWED:
+        name, group = BRANDS[brand.key]
+        if name in have:
+            continue
+        for word in (brand.key, brand.name, *brand.aliases):
+            text = re.sub(r"[^a-z0-9]+", " ", word.lower()).strip()
+            out.append((f" {text} " if len(text.replace(" ", "")) <= merchant_allowlist.SHORT else text, name, group))
+    return tuple(out)
+
+
+REGISTRY = REGISTRY + _allow_list_patterns()
+
+
+def is_plain(name: str | None) -> bool:
+    """True for a brand on the allow-list: its name may sit in plain text (a cap target, an alert's dedupe key, a push).
+    Any other merchant name (one you taught, Flipkart Minutes) is yours and stays sealed."""
+    return name in PLAIN_NAMES
+
+
+def by_key(key: str | None) -> Merchant | None:
+    """The merchant for a plain `merchant_key` ('swiggy'), or None."""
+    found = BRANDS.get(key or "")
+    return Merchant(found[0], found[1], key or "") if found else None
+
+
 _NON_WORD = re.compile(r"[^a-z0-9]+")
 
 
@@ -105,7 +152,8 @@ def user_patterns(conn=None) -> list[tuple[str, str, str]]:
     else:
         with connect() as own:
             rows = own.execute(sql).fetchall()
-    return [(r["pattern"], r["merchant"], r["grp"]) for r in rows]
+    # a taught pattern is sealed: signed out (no key) it reads as None and is simply not used until the next sign-in
+    return [(r["pattern"], r["merchant"], r["grp"]) for r in rows if r["pattern"] and r["merchant"]]
 
 
 def match(payee: str | None, description: str | None = None, *, user: list[tuple[str, str, str]] | None = None) -> Merchant | None:
@@ -156,10 +204,10 @@ def add_pattern(pattern: str, merchant: str, group: str) -> dict:
         raise RectifiError(f"Group must be one of: {', '.join(GROUPS)}.")
     with connect() as conn:
         row = conn.execute(
-            "INSERT INTO merchant_patterns (pattern, merchant, grp) VALUES (%s, %s, %s) "
+            "INSERT INTO merchant_patterns (pattern, merchant, grp, pattern_blind) VALUES (%s, %s, %s, %s) "
             "ON CONFLICT (user_id, pattern_blind) DO UPDATE SET merchant = EXCLUDED.merchant, grp = EXCLUDED.grp "
             "RETURNING id, pattern, merchant, grp AS \"group\", created_at",
-            (text, name, group),
+            (vault.seal(text), vault.seal(name), group, vault.blind(text)),
         ).fetchone()
     return row
 

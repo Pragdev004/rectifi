@@ -132,10 +132,11 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
             if not os.getenv("RECTIFI_NO_ALERT_BACKGROUND"):
                 from .. import alerts
 
-                try:
-                    await run_in_threadpool(alerts.ensure_watermark)       # what is already here is history, not news
-                except DB_ERRORS:
-                    pass
+                if not config.multiuser():      # one person: set the baseline now. Several people: nobody is bound here, so each
+                    try:                         # person gets theirs lazily at their first sweep (alerts.sweep -> ensure_watermark)
+                        await run_in_threadpool(alerts.ensure_watermark)       # what is already here is history, not news
+                    except DB_ERRORS:
+                        pass
                 ticker = asyncio.create_task(alert_ticker())
             # ═══ WS-ALERTS: end ═══
         try:
