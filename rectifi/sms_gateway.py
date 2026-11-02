@@ -224,7 +224,10 @@ def create_app() -> Starlette:
             raise
         except DB_ERRORS:
             log.warning("The database is not reachable yet. /sms answers 503 (the phone retries) until it is.")
-        if config.sms_host_is_open():
+        if config.public_mode() and config.sms_host_is_open():
+            log.warning("Rectifi phone gateway is on for the server: it listens inside its container and the host publishes it on "
+                        "127.0.0.1 only (Funnel). Every SMS needs a device token.")
+        elif config.sms_host_is_open():
             log.warning("Rectifi phone gateway is listening on %s, so anyone on your network with a device token can send "
                         "SMS to it. Prefer RECTIFI_SMS_HOST=127.0.0.1 and `python scripts/dev.py tailscale`.", config.sms_host())
         else:

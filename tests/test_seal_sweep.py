@@ -238,6 +238,21 @@ def test_an_old_alert_whose_hidden_key_already_exists_is_dropped_not_a_crash(own
     assert keys.count(hidden) == 1 and plain not in keys
 
 
+def test_muted_and_snoozed_scope_names_in_the_alert_prefs_are_hidden_like_alert_keys(owner):
+    import json
+
+    with as_user(1), db.connect() as conn:
+        prefs = {"muted_scopes": ["streak:Chaayos", "streak:Swiggy"], "snoozed_scopes": {"merchant:Chaayos:week": "2099-01-01T00:00:00+00:00"}}
+        conn.execute("INSERT INTO app_settings (key, value) VALUES ('alerts.prefs', %s::jsonb)", (json.dumps(prefs),))
+    assert seal_sweep.run(owner)["finished"]
+    value = raw("SELECT value FROM app_settings WHERE key = 'alerts.prefs'")[0]["value"]
+    assert "Chaayos" not in json.dumps(value) and "streak:Swiggy" in value["muted_scopes"]            # the brand stays readable
+    assert len(value["snoozed_scopes"]) == 1
+    before = value
+    assert seal_sweep.run(owner)["finished"]
+    assert raw("SELECT value FROM app_settings WHERE key = 'alerts.prefs'")[0]["value"] == before     # a second run changes nothing
+
+
 def test_the_old_ledger_text_copies_in_the_library_index_are_dropped(owner):
     assert raw("SELECT count(*) AS n FROM rag_chunks WHERE corpus = 'txn'")[0]["n"] == 1
     seal_sweep.run(owner)

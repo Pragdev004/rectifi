@@ -86,7 +86,10 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
         return FileResponse(index, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
     def _start_background_work() -> None:
-        """Only when the database is up: finish sorting jobs a restart cut short, and refresh the library index (a thread; one worker)."""
+        """Only when the database is up: finish sorting jobs a restart cut short, and refresh the library index (a thread; one worker).
+        Several people: nobody is bound here, so the owner's sign-in hook (hooks.ai_after_sign_in) does both instead."""
+        if config.multiuser():
+            return
         try:
             from ..agent import jobs                            # lazy: rectifi.api must import without langchain
 

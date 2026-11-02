@@ -11,6 +11,7 @@ but `users.encrypted` stays false and `sweep_state` is 'pending' (rectifi/users.
         merchant_rules / merchant_patterns .pattern_blind   blind(pattern)
         alert_rules.target_blind    blind(target), custom merchants only
   3. fills transactions.merchant_key from the allow-list where it is empty (read while the text is still readable),
+     (and the muted / snoozed scope keys in the alert preferences get the same treatment),
   4. drops the library's copies of ledger text (rag_chunks of corpus 'txn'), because decision D8 keeps ledger text out of them,
   5. checks that nothing plain is left, then sets users.encrypted = true (the database trigger takes over from there).
 
@@ -96,6 +97,24 @@ def _hide_key(key: str | None) -> str | None:
     if at is None or parts[at] == "b1" or not _is_custom_merchant(parts[at]):
         return key
     return ":".join(parts[:at] + [vault.blind_ingest(parts[at])] + parts[at + 1:])
+
+
+def _hide_prefs(conn) -> int:
+    """The alert preferences (app_settings 'alerts.prefs') list muted and snoozed scope keys such as 'streak:Chaayos'. A custom
+    merchant's name in one is hidden the same way as in alerts.scope_key. Returns 1 when the row changed, else 0 (safe to repeat)."""
+    row = conn.execute("SELECT value FROM app_settings WHERE key = 'alerts.prefs'").fetchone()
+    if not row or not isinstance(row["value"], dict):
+        return 0
+    prefs = dict(row["value"])
+    muted = prefs.get("muted_scopes")
+    snoozed = prefs.get("snoozed_scopes")
+    new_muted = sorted({_hide_key(k) for k in muted}) if isinstance(muted, list) else muted
+    new_snoozed = {_hide_key(k): v for k, v in snoozed.items()} if isinstance(snoozed, dict) else snoozed
+    if new_muted == muted and new_snoozed == snoozed:
+        return 0
+    prefs.update({"muted_scopes": new_muted, "snoozed_scopes": new_snoozed})
+    conn.execute("UPDATE app_settings SET value = %s::jsonb, updated_at = now() WHERE key = 'alerts.prefs'", (json.dumps(prefs),))
+    return 1
 
 
 # ───────────────────────── what one row needs ─────────────────────────
@@ -287,6 +306,8 @@ def run(ctx: userctx.UserContext, *, batch: int = BATCH, max_batches: int | None
                         on_batch(table, changed)
                     if max_batches is not None and batches >= max_batches:
                         return {"finished": False, "sealed": done, "busy": False}
+            with db.connect() as conn:
+                done += _hide_prefs(conn)
             if remaining() != 0:                               # never switch the database guard on over plain text
                 log.warning("sweep: some rows still hold plain text; encryption is not switched on yet")
                 return {"finished": False, "sealed": done, "busy": False}

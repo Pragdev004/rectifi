@@ -420,3 +420,17 @@ def test_a_real_server_answers_health_and_the_test_message_is_ignored_and_stores
         thread.join(10)
     assert sms_gateway.gateway_reachable(port, timeout=0.5) is False
     assert sms_gateway.send_test_sms("rf_x", port)[0] is None
+
+
+def test_the_start_up_line_is_honest_on_the_server_and_on_an_open_laptop(monkeypatch, caplog):
+    """On the server the gateway binds 0.0.0.0 inside its container (the host publishes it on 127.0.0.1): no 'your network' scare."""
+    for host, public, words in (("0.0.0.0", "1", "Funnel"), ("0.0.0.0", "", "anyone on your network"), ("127.0.0.1", "", "this laptop only")):
+        monkeypatch.setenv("RECTIFI_SMS_HOST", host)
+        monkeypatch.setenv("RECTIFI_PUBLIC", public)
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="rectifi.sms_gateway"):
+            with TestClient(sms_gateway.create_app()):
+                pass
+        assert words in caplog.text, (host, public, caplog.text)
+        if public:
+            assert "anyone on your network" not in caplog.text
