@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 MIN_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 1024
 MIN_SECRET_LENGTH = 32
+TRUE_WORDS = ("1", "true", "yes", "on")
 SCRYPT_N, SCRYPT_R, SCRYPT_P, SCRYPT_LEN, SALT_BYTES = 2**14, 8, 1, 32, 16
 HASH_RE = re.compile(r"^scrypt\$\d+\$\d+\$\d+\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+$")
 HOST_RE = re.compile(r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
@@ -187,6 +188,11 @@ def check_files(rep: Report, root: Path) -> None:
         lines = {ln.strip() for ln in ignore.read_text(encoding="utf-8").splitlines()}
         (rep.ok if ".env" in lines or ".env*" in lines else rep.fail)(".dockerignore keeps .env files out of the image"
                                                                       if (".env" in lines or ".env*" in lines) else ".dockerignore does not list .env")
+    compose = root / COMPOSE_FILE
+    if compose.is_file():
+        bad = [ln.strip() for ln in compose.read_text(encoding="utf-8").splitlines()
+               if re.match(r"""^\s*-\s*["']?(\d|0\.0\.0\.0|\[?::)""", ln) and "127.0.0.1:" not in ln]
+        (rep.fail if bad else rep.ok)(f"a published port is not on 127.0.0.1 only: {bad[0]}" if bad else "every published port is on 127.0.0.1 only")
     if not (root / "web" / "dist" / "index.html").is_file():
         rep.fail("web/dist/index.html is missing: the image would have no web app. Run `python scripts/dev.py build-web` and commit web/dist.")
 
@@ -219,13 +225,29 @@ def check_env(rep: Report, root: Path, env_path: Path) -> dict[str, str] | None:
         rep.fail("POSTGRES_PASSWORD is shorter than 16 characters.")
     else:
         rep.ok("POSTGRES_PASSWORD is set")
-    stored = env.get("RECTIFI_PASSWORD_HASH", "")
-    if not HASH_RE.match(stored):
-        rep.fail("RECTIFI_PASSWORD_HASH is missing or not valid. Run `python scripts/dev.py set-password --print`.")
+    db_pw = env.get("RECTIFI_DB_PASSWORD", "")
+    if not db_pw:
+        rep.fail("RECTIFI_DB_PASSWORD is empty. It is the app's own database login (not the superuser). Make one with: openssl rand -hex 24")
+    elif not re.fullmatch(r"[A-Za-z0-9]+", db_pw):
+        rep.fail("RECTIFI_DB_PASSWORD may use letters and numbers only (it goes inside a web address).")
+    elif len(db_pw) < 16:
+        rep.fail("RECTIFI_DB_PASSWORD is shorter than 16 characters.")
+    elif db_pw == pw:
+        rep.fail("RECTIFI_DB_PASSWORD must be different from POSTGRES_PASSWORD. The app must not log in as the superuser.")
     else:
-        rep.ok("RECTIFI_PASSWORD_HASH looks right")
+        rep.ok("RECTIFI_DB_PASSWORD is set and differs from POSTGRES_PASSWORD")
+    multiuser = env.get("RECTIFI_MULTIUSER", "").strip().lower() in TRUE_WORDS
+    if multiuser:
+        rep.ok("RECTIFI_MULTIUSER is on: invite sign-up, no shared password (RECTIFI_PASSWORD_HASH is ignored)")
+    else:
+        stored = env.get("RECTIFI_PASSWORD_HASH", "")
+        if not HASH_RE.match(stored):
+            rep.fail("RECTIFI_PASSWORD_HASH is missing or not valid. Run `python scripts/dev.py set-password --print`.")
+        else:
+            rep.ok("RECTIFI_PASSWORD_HASH looks right")
     if len(env.get("RECTIFI_SESSION_SECRET", "")) < MIN_SECRET_LENGTH:
-        rep.fail(f"RECTIFI_SESSION_SECRET is missing or shorter than {MIN_SECRET_LENGTH} characters. `set-password --print` makes one.")
+        how = "Make one with: openssl rand -hex 32" if multiuser else "`set-password --print` makes one."
+        rep.fail(f"RECTIFI_SESSION_SECRET is missing or shorter than {MIN_SECRET_LENGTH} characters. {how}")
     else:
         rep.ok("RECTIFI_SESSION_SECRET is set")
     return env
