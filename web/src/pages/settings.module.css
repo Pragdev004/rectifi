@@ -1,0 +1,11 @@
+.page { display: grid; gap: var(--s-6); max-width: 40rem; }
+.panel { display: grid; gap: var(--s-4); padding: var(--s-4); background: var(--c-raised); border: 1px solid var(--c-rule); border-radius: var(--r-2); min-width: 0; }
+.panelTitle { font-size: var(--t-lg); line-height: var(--t-lg-lh); font-weight: 500; }
+.danger { border-color: var(--c-over); }
+.form { display: grid; gap: var(--s-4); max-width: 26rem; }
+.muted { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); }
+.who { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); align-items: center; }
+.who strong { font-family: var(--font-figures); overflow-wrap: anywhere; }
+.row { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
+.links { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-4); }
+.links a { display: inline-flex; align-items: center; min-height: 44px; color: var(--c-accent); }

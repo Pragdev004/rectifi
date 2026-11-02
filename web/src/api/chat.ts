@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { isOwnerView, useAuthStatus } from "./auth";
 import { del, get, patch, post, qs } from "./client";
 import { streamNdjson } from "./ndjson";
 import type { Citation, TraceEvent } from "./knowledge";
@@ -77,8 +78,14 @@ export const chatKeys = {
   allThreads: ["chat", "threads"] as const,
 };
 
-export const useChatStatus = () =>
-  useQuery({ queryKey: chatKeys.status, queryFn: ({ signal }) => get<AskStatus>("/chat/status", signal), staleTime: 30_000 });
+/** The Ask model's state. A friend never asks the server (it would answer 403): the model is the owner's only. */
+export const useChatStatus = () => {
+  const auth = useAuthStatus(); // wait for the answer: asking before it is known would send a friend's browser to a 403
+  return useQuery({
+    queryKey: chatKeys.status, queryFn: ({ signal }) => get<AskStatus>("/chat/status", signal), staleTime: 30_000,
+    enabled: auth.data !== undefined && isOwnerView(auth.data),
+  });
+};
 
 export const useThreads = (q: string) =>
   useQuery<Thread[]>({

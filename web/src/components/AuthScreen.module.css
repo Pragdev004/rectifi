@@ -60,3 +60,10 @@
 @media (prefers-reduced-motion: reduce) {
   .slip { animation: none; }
 }
+
+/* ── wider screens (the Privacy page) and the extras the sign-up, recover and code screens need ── */
+.inner.wide { max-width: 46rem; }
+.slip.flat { box-shadow: none; }
+.links { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-4); }
+.links a { display: inline-flex; align-items: center; min-height: 44px; color: var(--c-accent); font-size: var(--t-sm); }
+.slip h2 { font-size: var(--t-lg); line-height: var(--t-lg-lh); }
