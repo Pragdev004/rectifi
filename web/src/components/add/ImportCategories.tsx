@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { applyToSimilar, jobIsActive, startSorting, useBatchRows, type BatchSummary, type ClassifyJob, type Show, type SortedTxn } from "../../api/classify";
+import { useIsOwner } from "../../api/auth";
 import { patch } from "../../api/client";
 import { refreshBooks, useMeta } from "../../api/queries";
 import type { EditResult } from "../../api/types";
@@ -147,6 +148,7 @@ export function ImportCategories({ batchId }: { batchId: number }) {
   const [show, setShow] = useState<Show>("all");
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const owner = useIsOwner();
   const rows = useBatchRows(batchId, show);
   const data = rows.data;
 
@@ -167,8 +169,9 @@ export function ImportCategories({ batchId }: { batchId: number }) {
   if (!data) return <p className={styles.help} role="status">Loading categories…</p>;
   if (data.summary.total === 0) return null;
   const job = data.job;
-  const line = jobLine(job, data.summary.miscellaneous);
-  const canSort = job?.status === "no_model" || job?.status === "failed";
+  // The model pass is the owner's only (a friend's entries are sorted by the fixed rules alone), so a friend sees no model line or button.
+  const line = owner ? jobLine(job, data.summary.miscellaneous) : null;
+  const canSort = owner && (job?.status === "no_model" || job?.status === "failed");
 
   return (
     <section className={styles.section} aria-labelledby="import-cats" data-testid="import-categories">

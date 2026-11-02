@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { lazy, Suspense } from "react";
 import { Route, Switch } from "wouter";
+import { useAuthStatus, isOwnerView } from "./api/auth";
 import { NetworkError } from "./api/client";
 import { AppShell } from "./components/shell/AppShell";
 import { ToastProvider } from "./components/Toast";
@@ -19,6 +20,10 @@ import ChartsPage from "./pages/Charts";
 import LibraryPage from "./pages/Library";
 import LoginPage from "./pages/Login";
 import MemoryPage from "./pages/Memory";
+import PrivacyPage from "./pages/Privacy";
+import RecoverPage from "./pages/Recover";
+import SettingsPage from "./pages/Settings";
+import SignupPage from "./pages/Signup";
 import TracesPage from "./pages/Traces";
 
 /** Alerts and Leaks load on first visit. If the chunk is gone (a rebuild), show a plain message, never a blank page. */
@@ -44,6 +49,27 @@ const client = new QueryClient({
   },
 });
 
+/** The owner-only pages (Ask, Charts, Library, Memory, Traces). A friend is told so in words instead of getting a page full of 403s.
+ *  The server refuses them too: this is only what the screen shows. */
+function ownerOnly(Page: React.ComponentType): React.ComponentType {
+  return function OwnerOnly() {
+    const auth = useAuthStatus();
+    if (auth.data && !isOwnerView(auth.data)) {
+      return (
+        <EmptyState title="This page is for the owner." actions={<LinkButton to="/" variant="primary">Go to Overview</LinkButton>}>
+          Ask, Charts, Library, Memory and Traces are only for the person who runs this Rectifi.
+        </EmptyState>
+      );
+    }
+    return <Page />;
+  };
+}
+const OwnerAsk = ownerOnly(AskPage);
+const OwnerCharts = ownerOnly(ChartsPage);
+const OwnerLibrary = ownerOnly(LibraryPage);
+const OwnerMemory = ownerOnly(MemoryPage);
+const OwnerTraces = ownerOnly(TracesPage);
+
 function NotFound() {
   return (
     <EmptyState title="There is nothing at this address." actions={<LinkButton to="/" variant="primary">Go to Overview</LinkButton>}>
@@ -68,11 +94,12 @@ function Pages() {
         <Route path="/budgets" component={Budgets} />
         <Route path="/accounts" component={Accounts} />
         <Route path="/phone" component={PhonePage} />
-        <Route path="/ask" component={AskPage} />
-        <Route path="/charts" component={ChartsPage} />
-        <Route path="/library" component={LibraryPage} />
-        <Route path="/memory" component={MemoryPage} />
-        <Route path="/traces" component={TracesPage} />
+        <Route path="/ask" component={OwnerAsk} />
+        <Route path="/charts" component={OwnerCharts} />
+        <Route path="/library" component={OwnerLibrary} />
+        <Route path="/memory" component={OwnerMemory} />
+        <Route path="/traces" component={OwnerTraces} />
+        <Route path="/settings" component={SettingsPage} />
         <Route><NotFound /></Route>
       </Switch>
       </Suspense>
@@ -85,7 +112,11 @@ export default function App() {
     <QueryClientProvider client={client}>
       <ToastProvider>
         <Switch>
-          <Route path="/login" component={LoginPage} />   {/* outside the shell: no sidebar before you are signed in */}
+          {/* outside the shell: no sidebar and no data requests before you are signed in. Privacy is public. */}
+          <Route path="/login" component={LoginPage} />
+          <Route path="/signup" component={SignupPage} />
+          <Route path="/recover" component={RecoverPage} />
+          <Route path="/privacy" component={PrivacyPage} />
           <Route component={Pages} />
         </Switch>
       </ToastProvider>
