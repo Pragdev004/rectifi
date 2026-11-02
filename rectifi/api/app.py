@@ -57,6 +57,9 @@ def api_routes() -> list[Route]:
                    classify, charts, chat, memory, traces, models, auth, knowledge, alerts_routes):
         found += module.routes
     # ═══ WS-ACCOUNT: begin ═══   (account export and delete, /api/privacy)
+    from .routes import account as account_routes
+
+    found += account_routes.routes
     # ═══ WS-ACCOUNT: end ═══
     return found
 

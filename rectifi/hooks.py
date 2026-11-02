@@ -71,7 +71,16 @@ def alerts_after_sign_in(ctx: userctx.UserContext) -> None:
 
 # ═══ WS-ACCOUNT: begin ═══
 def account_after_sign_in(ctx: userctx.UserContext) -> None:
-    """Resume the owner's sealing sweep if it stopped halfway."""
+    """Every person: move text that was sealed while they were signed out (rs1.) to their data key (rx1.), in the tables
+    WS-CORE's block does not cover. The owner: resume the sealing sweep if the claim left one pending or it stopped halfway
+    (a background thread that keeps the owner's context; it is safe to start again)."""
+    from . import config, seal_sweep
+
+    if not config.multiuser() or ctx.key is None:
+        return
+    seal_sweep.drain_rs1(ctx)
+    if seal_sweep.should_run(ctx.uid):
+        userctx.spawn(seal_sweep.run_in_background, ctx, name="rectifi-seal-sweep")
 # ═══ WS-ACCOUNT: end ═══
 
 
