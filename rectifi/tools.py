@@ -17,9 +17,9 @@ from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
-from . import categorize
+from . import categorize, config, merchant_allowlist, userctx, vault
 from .categorize import FALLBACK_EXPENSE, FALLBACK_INCOME, fallback_name, merchant_key
-from .db import connect
+from .db import connect, connect_system
 from .money import D0, PAISE, fmt_inr, parse_amount
 from .parsing import best_effort_sms, classify_sms, parse_sms
 
@@ -30,7 +30,8 @@ class RectifiError(ValueError):
 
 TXN_SELECT = """
 SELECT t.id, t.txn_date, t.amount, t.direction, t.payee, t.description, t.note, t.source,
-       t.upi_ref, t.account_id, a.name AS account, t.category_id, c.name AS category, c.kind AS category_kind,
+       COALESCE(t.upi_ref_sealed, CASE WHEN left(t.upi_ref, 3) = 'b1:' THEN NULL ELSE t.upi_ref END) AS upi_ref,
+       t.account_id, a.name AS account, t.category_id, c.name AS category, c.kind AS category_kind,
        t.category_source, t.category_confidence, t.category_reason, t.classify_state,
        t.suggested_category_id, sc.name AS suggested_category, t.suggested_confidence
 FROM transactions t
@@ -139,11 +140,17 @@ def _check_kind(conn, category_id: int, direction: str) -> None:
         )
 
 
+def can_read() -> bool:
+    """False while a person's data key is not here (an SMS that arrived signed out): their learned rules and past payments are
+    sealed, so only the built-in rules and word heuristics can run. They run again, in full, at the next sign-in (hooks.py)."""
+    return not config.multiuser() or userctx.current().key is not None
+
+
 def _categorize_detail(conn, payee: str | None, description: str | None, direction: str,
                        ctx: "categorize.Context | None" = None) -> tuple[int, categorize.Decision]:
     """The fixed layers (learned rule, built-in rule, heuristic, look-alike past payment, else the catch-all).
     Returns (category id, why). Pass a `ctx` from categorize.load_context(conn) to reuse it across many rows."""
-    ctx = ctx or categorize.load_context(conn)
+    ctx = ctx or categorize.load_context(conn, with_index=can_read())
     decision = categorize.decide_with(ctx, payee, description, direction)
     return ctx.category_ids[decision.category], decision
 
@@ -265,6 +272,12 @@ def add_transaction(
     when = resolve_date(txn_date)
     payee = payee.strip() if payee else None
     upi_ref = upi_ref.strip() if upi_ref else None
+    # Dedupe keys are keyed hashes (laptop mode: the text itself). upi_ref works signed out too (ingest salt); fingerprint
+    # needs the session key. The plain reference is kept only sealed, in upi_ref_sealed.
+    upi_key = vault.blind_ingest(upi_ref)
+    fingerprint = vault.blind(fingerprint)
+    brand = merchant_allowlist.plain_key(payee, description)       # an allow-listed brand stays plain (D3); None for every other payee
+    arrived_locked = config.multiuser() and userctx.current().key is None      # an SMS that came in while the person was signed out
 
     def insert(conn) -> dict:
         suggested_id = None
@@ -278,20 +291,22 @@ def add_transaction(
         account_id = _account_id(conn, account)
         row = conn.execute(
             """INSERT INTO transactions
-                 (account_id, amount, direction, txn_date, payee, description, upi_ref, fingerprint,
+                 (account_id, amount, direction, txn_date, payee, description, upi_ref, upi_ref_sealed, fingerprint,
                   category_id, source, raw_text, note,
-                  category_source, category_confidence, category_reason, suggested_category_id, suggested_confidence)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                  category_source, category_confidence, category_reason, suggested_category_id, suggested_confidence,
+                  merchant_key, unlocked)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT DO NOTHING
                RETURNING id""",
-            (account_id, value, direction, when, payee, description, upi_ref, fingerprint,
-             category_id, source, raw_text, note,
-             why.source, why.confidence, why.reason, suggested_id, why.suggested_confidence if suggested_id else None),
+            (account_id, value, direction, when, vault.seal(payee), vault.seal(description), upi_key, vault.seal(upi_ref), fingerprint,
+             category_id, source, vault.seal(raw_text), vault.seal(note),
+             why.source, why.confidence, vault.seal(why.reason), suggested_id, why.suggested_confidence if suggested_id else None,
+             brand, not arrived_locked),
         ).fetchone()
         if row is None:
             existing = conn.execute(
                 TXN_SELECT + " WHERE (t.upi_ref = %s AND t.direction = %s) OR t.fingerprint = %s LIMIT 1",
-                (upi_ref, direction, fingerprint),
+                (upi_key, direction, fingerprint),
             ).fetchone()
             return {"status": "duplicate", "transaction": existing}
         return {"status": "added", "transaction": get_transaction(row["id"], conn)}
@@ -313,18 +328,18 @@ def set_category(txn_id: int, category: str, remember: bool = False) -> dict:
         _check_kind(conn, category_id, current["direction"])
         row = conn.execute(
             """UPDATE transactions SET category_id = %s, category_source = 'user', category_confidence = 100,
-                      category_reason = 'you chose', suggested_category_id = NULL, suggested_confidence = NULL,
+                      category_reason = %s, suggested_category_id = NULL, suggested_confidence = NULL,
                       classify_state = CASE WHEN classify_state = 'pending' THEN 'done' ELSE classify_state END
                WHERE id = %s RETURNING payee, description""",
-            (category_id, txn_id),
+            (category_id, vault.seal("you chose"), txn_id),
         ).fetchone()
         learned = None
         pattern = merchant_key(row["payee"], row["description"])
         if remember and len(pattern) >= LEARN_MIN_KEY:
             conn.execute(
-                """INSERT INTO merchant_rules (pattern, category_id, source) VALUES (%s, %s, 'learned')
+                """INSERT INTO merchant_rules (pattern, pattern_blind, category_id, source) VALUES (%s, %s, %s, 'learned')
                    ON CONFLICT (user_id, pattern_blind) DO UPDATE SET category_id = EXCLUDED.category_id, source = 'learned'""",
-                (pattern, category_id),
+                (vault.seal(pattern), vault.blind(pattern), category_id),
             )
             learned = pattern
         return {"transaction": get_transaction(txn_id, conn), "learned_rule": learned}
@@ -332,7 +347,7 @@ def set_category(txn_id: int, category: str, remember: bool = False) -> dict:
 
 def update_note(txn_id: int, note: str | None) -> None:
     with connect() as conn:
-        conn.execute("UPDATE transactions SET note = %s WHERE id = %s", (note or None, txn_id))
+        conn.execute("UPDATE transactions SET note = %s WHERE id = %s", (vault.seal(note or None), txn_id))
 
 
 def set_account(txn_id: int, account_id: int | None) -> dict:
@@ -361,6 +376,7 @@ def delete_transaction(txn_id: int) -> bool:
 
 # ─────────────────────────── reads ───────────────────────────
 
+SEARCH_WINDOW = 20_000      # how many of the newest rows the ledger search reads (it runs in Python: the text is sealed)
 CATEGORY_SOURCES = ("user", "learned", "rule", "heuristic", "retrieval", "llm", "fallback")      # how a category was chosen
 
 
@@ -403,12 +419,16 @@ def list_transactions(
         if account not in (None, ""):
             clauses.append("t.account_id = %s")
             params.append(_account_id(conn, account))
-        if search:
-            clauses.append("(t.payee ILIKE %s OR t.description ILIKE %s OR t.note ILIKE %s)")
-            params += [f"%{search}%"] * 3
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-        params.append(max(1, min(int(limit), 5000)))
-        return conn.execute(TXN_SELECT + where + " ORDER BY t.txn_date DESC, t.id DESC LIMIT %s", params).fetchall()
+        limit = max(1, min(int(limit), 5000))
+        # Payee, description and note are sealed, so the database cannot search them: search runs here, in Python, over the
+        # newest SEARCH_WINDOW rows that pass the other filters (decision in the multi-user plan, section 3 point 4).
+        params.append(SEARCH_WINDOW if search else limit)
+        rows = conn.execute(TXN_SELECT + where + " ORDER BY t.txn_date DESC, t.id DESC LIMIT %s", params).fetchall()
+    if search:
+        needle = search.casefold()
+        rows = [r for r in rows if any(needle in (r[k] or "").casefold() for k in ("payee", "description", "note"))][:limit]
+    return rows
 
 
 def spending_summary(start: date | None = None, end: date | None = None) -> dict:
@@ -876,7 +896,7 @@ def save_commitment(text: str, day: str | date | None = None) -> dict:
         conn.execute(
             """INSERT INTO weekly_reviews (week_start, commitment) VALUES (%s, %s)
                ON CONFLICT (user_id, week_start) DO UPDATE SET commitment = EXCLUDED.commitment""",
-            (start, text),
+            (start, vault.seal(text)),
         )
     return {"week_start": start, "commitment": text}
 
@@ -958,10 +978,10 @@ def create_device(name: str) -> dict:
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
     with connect() as conn:
         row = conn.execute(
-            "INSERT INTO phone_devices (name, token_hash) VALUES (%s, %s) RETURNING id, name, created_at",
-            (name, _hash_token(token)),
+            "INSERT INTO phone_devices (name, token_hash) VALUES (%s, %s) RETURNING id, created_at",
+            (vault.seal(name), _hash_token(token)),
         ).fetchone()
-    return {**row, "token": token}
+    return {**row, "name": name, "token": token}
 
 
 def list_devices() -> list[dict]:
@@ -985,19 +1005,34 @@ def authenticate_device(token: str | None) -> dict | None:
     """The device this token belongs to, or None (unknown or revoked). A good token also updates last_seen_at.
 
     The hash of the presented token is compared with every stored hash using hmac.compare_digest, with no early
-    exit, so the time taken does not hint at which part matched."""
+    exit, so the time taken does not hint at which part matched.
+
+    The lookup runs on a system connection (the token is how we find the person; nobody is signed in yet). A good answer
+    carries `ctx`: that person's UserContext with NO data key (strict False) but with the public key and ingest salt, so
+    the gateway can seal and dedupe while they are signed out. The caller binds it (userctx.bound) for every write, so a
+    token only ever writes as its own owner. `ctx` is never logged."""
     if not token or len(token) > 200:
         return None
     digest = _hash_token(token)
-    with connect() as conn:
+    with connect_system("tools.authenticate_device: find the person a phone token belongs to") as conn:
         match = None
-        for row in conn.execute("SELECT id, name, token_hash, revoked_at FROM phone_devices").fetchall():
+        for row in conn.execute("SELECT id, user_id, name, token_hash, revoked_at FROM phone_devices").fetchall():
             if hmac.compare_digest(row["token_hash"], digest):
                 match = row
         if match is None or match["revoked_at"] is not None:
             return None
+        person = conn.execute("SELECT public_key, ingest_salt FROM users WHERE id = %s", (match["user_id"],)).fetchone() or {}
+    ctx = userctx.UserContext(uid=match["user_id"], key=None, public_key=bytes(person["public_key"]) if person.get("public_key") else None,
+                              ingest_salt=bytes(person["ingest_salt"]) if person.get("ingest_salt") else None, strict=False)
+    with userctx.bound(ctx), connect() as conn:
         conn.execute("UPDATE phone_devices SET last_seen_at = now() WHERE id = %s", (match["id"],))
-    return {"id": match["id"], "name": match["name"]}
+    name = match["name"] if not vault.is_envelope(match["name"]) else None        # a sealed name stays sealed: the gateway never needs it
+    return {"id": match["id"], "name": name, "uid": match["user_id"], "ctx": ctx}
+
+
+def _sms_key(sender: str | None, text: str, sent_at: datetime | None) -> str:
+    """The stored identity of one SMS: the digest, keyed per person (works signed out). Laptop mode: the digest itself."""
+    return vault.blind_ingest(_sms_digest(sender, text, sent_at))
 
 
 def _sms_digest(sender: str | None, text: str, sent_at: datetime | None) -> str:
@@ -1054,7 +1089,7 @@ def _to_inbox(device_id, sender, text, sent_at, digest, reason) -> dict:
         row = conn.execute(
             """INSERT INTO sms_inbox (device_id, sender, raw_text, sent_at, reason, text_hash)
                VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (user_id, text_hash) DO NOTHING RETURNING id""",
-            (device_id, sender, text, sent_at, reason, digest),
+            (device_id, vault.seal(sender), vault.seal(text), sent_at, vault.seal(reason), digest),
         ).fetchone()
     return {"status": "duplicate"} if row is None else {"status": "needs_review", "inbox_id": row["id"], "reason": reason}
 
@@ -1072,7 +1107,11 @@ def ingest_sms(device_id: int | None, sender: str | None, text: str, sent_at: da
     verdict = classify_sms(text, sender)
     if verdict.kind == "ignored":
         return {"status": "ignored", "reason": verdict.reason}
-    digest = _sms_digest(sender, text, sent_at)
+    if device_id is not None:
+        with connect() as conn:                 # the device must be this person's (row level security hides anyone else's)
+            if conn.execute("SELECT 1 FROM phone_devices WHERE id = %s", (device_id,)).fetchone() is None:
+                raise RectifiError("That phone is not paired to this account.")
+    digest = _sms_key(sender, text, sent_at)
     if verdict.kind == "review":
         return _to_inbox(device_id, sender, text, sent_at, digest, verdict.reason)
     parsed = verdict.parsed
@@ -1125,6 +1164,8 @@ def inbox_prefill(item_id: int) -> dict:
         item = conn.execute("SELECT id, raw_text FROM sms_inbox WHERE id = %s", (item_id,)).fetchone()
     if item is None:
         raise RectifiError(f"No inbox item #{item_id}.")
+    if item["raw_text"] is None:
+        raise RectifiError("Sign in again to read this message.")
     guess = best_effort_sms(item["raw_text"])
     account_id = None
     if guess["account_last4"]:

@@ -12,7 +12,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ... import alerts, tools
+from ... import alerts, tools, userctx
 from ...importer import ROLES, assess_statement, import_rows, normalise, preview_totals, read_table
 from .. import uploads, wire
 from ..errors import ApiError
@@ -129,7 +129,11 @@ def process_upload(filename: str, data: bytes, password: str | None, manual: boo
 
 def start_sorting(batch_id: int) -> None:
     """The import is already saved with the fixed rules. If rows are still in Miscellaneous, queue the optional model pass
-    (or record that the model is off). The import never waits for it and never fails because of it."""
+    (or record that the model is off). The import never waits for it and never fails because of it.
+
+    Owner only (multi-user plan D7): a friend's rows are never sent to a model and never indexed, so nothing is queued for them."""
+    if userctx.current().uid != userctx.OWNER_UID:
+        return
     try:
         from ...agent import jobs                              # lazy: rectifi.api must import without langchain
 

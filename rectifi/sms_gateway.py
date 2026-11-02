@@ -39,7 +39,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from . import alerts, config, tools
+from . import alerts, config, tools, userctx
 from .db import DatabaseUnavailable, TenancyMigrationNeeded, UnsafeDatabaseRole, init_db
 
 log = logging.getLogger("rectifi.sms_gateway")
@@ -160,6 +160,19 @@ async def _read_body(request: Request) -> bytes | None:
     return bytes(body)
 
 
+def _ingest_as(device: dict, sender, text, sent_at) -> dict:
+    """Write one SMS as the person who owns this device (and nobody else): the device's own context is bound for every
+    database call here. It has no data key, so texts are sealed to the person's public key and read again at sign-in."""
+    with userctx.bound(device["ctx"]):
+        return tools.ingest_sms(device["id"], sender, text, sent_at)
+
+
+def _sweep_as(device: dict) -> None:
+    """The alerts sweep after a new payment, for that same person."""
+    with userctx.bound(device["ctx"]):
+        alerts.sweep_and_deliver("sms")
+
+
 def create_app() -> Starlette:
     device_limit = RateLimiter(RATE_LIMIT)
     failures = RateLimiter(FAILED_AUTH_LIMIT)
@@ -189,7 +202,7 @@ def create_app() -> Starlette:
         except ValueError as exc:
             return _reply(422, {"error": str(exc)})
         try:
-            result = await run_in_threadpool(tools.ingest_sms, device["id"], sender, text, sent_at)
+            result = await run_in_threadpool(_ingest_as, device, sender, text, sent_at)
         except DB_ERRORS:
             return _reply(503, {"error": "database not reachable"}, {"Retry-After": "30"})
         except Exception as exc:                       # never put the SMS or the token in a log line
@@ -197,14 +210,15 @@ def create_app() -> Starlette:
             return _reply(500, {"error": "internal error"})
         reply = _reply(200, {"status": result["status"]})
         if result["status"] == "added":                # a new payment: look for alerts after the phone has its answer
-            reply.background = BackgroundTask(alerts.sweep_and_deliver, "sms")
+            reply.background = BackgroundTask(_sweep_as, device)
         return reply
 
     @asynccontextmanager
     async def lifespan(app):
         try:
             await run_in_threadpool(init_db)
-            await run_in_threadpool(alerts.ensure_watermark)
+            if not config.multiuser():          # one person: set the alerts baseline now. Several people: each gets theirs at their first sweep
+                await run_in_threadpool(alerts.ensure_watermark)
         except (TenancyMigrationNeeded, UnsafeDatabaseRole) as exc:
             log.error("%s", exc)                    # the gateway does not start; the message says what to do
             raise

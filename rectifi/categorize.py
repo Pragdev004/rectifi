@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from . import textvec
+from . import textvec, userctx
 
 FALLBACK_EXPENSE = "Miscellaneous"      # was "Other" before this phase; the database row was renamed in place, same id
 FALLBACK_INCOME = "Other income"
@@ -160,10 +160,14 @@ class Context:
 
 def load_context(conn, *, with_index: bool = True) -> Context:
     cats = conn.execute("SELECT id, name, kind FROM categories").fetchall()
-    rules = conn.execute(
-        """SELECT r.pattern, c.name AS category, r.source FROM merchant_rules r JOIN categories c ON c.id = r.category_id
-           ORDER BY (r.source = 'learned') DESC, length(r.pattern) DESC, r.pattern"""
-    ).fetchall()
+    # A learned pattern is sealed, so the database cannot sort by its length: the order is made here. A pattern that reads as
+    # None is sealed and its key is not here (signed out): it is skipped until the next sign-in.
+    rules = sorted(
+        (r for r in conn.execute(
+            """SELECT r.pattern, c.name AS category, r.source FROM merchant_rules r JOIN categories c ON c.id = r.category_id"""
+        ).fetchall() if r["pattern"]),
+        key=lambda r: (r["source"] != "learned", -len(r["pattern"]), r["pattern"]),
+    )
     last4 = [r["last4"][-4:] for r in conn.execute("SELECT last4 FROM accounts WHERE last4 IS NOT NULL AND length(last4) >= 4").fetchall()]
     index = get_index(conn) if with_index else NgramIndex([])
     return Context(
@@ -233,7 +237,7 @@ class NgramIndex:
         return [(self.rows[i], cos) for i, cos in found if self.rows[i]["kind"] in wanted][:k]
 
 
-_index_cache: dict[str, "NgramIndex"] = {}
+_index_cache: dict[tuple, "NgramIndex"] = {}      # keyed by (person, stamp): one person's index is never handed to another
 
 
 def get_index(conn) -> "NgramIndex":
@@ -255,10 +259,11 @@ def get_index(conn) -> "NgramIndex":
         if key:
             items.append({"id": r["id"], "key": key, "category": r["category"], "kind": r["kind"],
                           "label": (r["payee"] or r["description"] or "")[:40]})
-    stamp = repr([(i["id"], i["key"], i["category"]) for i in items])
+    stamp = (userctx.current().uid, repr([(i["id"], i["key"], i["category"]) for i in items]))
     cached = _index_cache.get(stamp)
     if cached is None:
-        _index_cache.clear()
+        for old in [k for k in _index_cache if k[0] == stamp[0]]:       # one entry per person
+            del _index_cache[old]
         cached = _index_cache[stamp] = NgramIndex(items)
     return cached
 
