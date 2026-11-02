@@ -22,50 +22,57 @@ RECENT_MAX = 100
 class PendingUploads:
     def __init__(self, clock=time.monotonic) -> None:
         self.clock = clock
-        self._items: OrderedDict[str, tuple[float, int, dict]] = OrderedDict()      # id -> (when, owner uid, payload)
+        self._items: OrderedDict[str, tuple[float, dict]] = OrderedDict()      # id -> (when, payload)
+        self._owner: dict[str, int] = {}                                         # id -> the person who made it
         self._lock = threading.Lock()
+
+    def _remove(self, upload_id: str) -> None:
+        self._items.pop(upload_id, None)
+        self._owner.pop(upload_id, None)
 
     def _purge(self) -> None:
         cutoff = self.clock() - PENDING_TTL
-        for key in [k for k, (stamp, _, _) in self._items.items() if stamp <= cutoff]:
-            del self._items[key]
+        for key in [k for k, (stamp, _) in self._items.items() if stamp <= cutoff]:
+            self._remove(key)
 
     def put(self, payload: dict) -> str:
         uid = userctx.current().uid
         with self._lock:
             self._purge()
-            mine = [k for k, (_, owner, _) in self._items.items() if owner == uid]
+            mine = [k for k in self._items if self._owner.get(k) == uid]
             for key in mine[: max(0, len(mine) - PENDING_MAX + 1)]:
-                del self._items[key]
+                self._remove(key)
             upload_id = secrets.token_urlsafe(16)
-            self._items[upload_id] = (self.clock(), uid, payload)
+            self._items[upload_id] = (self.clock(), payload)
+            self._owner[upload_id] = uid
             return upload_id
 
     def get(self, upload_id: str) -> dict:
         with self._lock:
             self._purge()
             found = self._items.get(upload_id)
+            owner = self._owner.get(upload_id)
         if found is None:
             raise ApiError(409, "upload_expired", "That upload has expired. Choose the file again.")
-        if found[1] != userctx.current().uid:                      # someone else's upload: the same answer as no such upload
+        if owner != userctx.current().uid:                         # someone else's upload: the person must not learn it exists
             raise ApiError(404, "not_found", "There is no such upload.")
-        return found[2]
+        return found[1]
 
     def drop(self, upload_id: str) -> None:
         with self._lock:
-            found = self._items.get(upload_id)
-            if found is not None and found[1] == userctx.current().uid:
-                del self._items[upload_id]
+            if self._owner.get(upload_id) == userctx.current().uid:
+                self._remove(upload_id)
 
     def __len__(self) -> int:
         uid = userctx.current().uid
         with self._lock:
             self._purge()
-            return sum(1 for _, owner, _ in self._items.values() if owner == uid)
+            return sum(1 for k in self._items if self._owner.get(k) == uid)
 
     def clear(self) -> None:
         with self._lock:
             self._items.clear()
+            self._owner.clear()
 
 
 class RecentImports:
