@@ -266,12 +266,12 @@ def test_migrate_tenancy_takes_no_flags_such_as_a_yes_flag():
         users.migrate_tenancy(["--yes"])
 
 
-def test_the_invite_commands_say_they_are_not_built_and_change_nothing():
+def test_the_users_devtool_has_exactly_these_commands():
+    # The invite commands are real now (WS-AUTH, tested in test_users.py). No reset command may appear.
     users = load_users_devtool()
     assert set(users.COMMANDS) == {"migrate-tenancy", "invite", "invites", "revoke-invite"}
-    for name in ("invite", "invites", "revoke-invite"):
-        with pytest.raises(SystemExit, match="not built yet"):
-            users.COMMANDS[name][0]([])
+    for name, (fn, help_text) in users.COMMANDS.items():
+        assert callable(fn) and help_text
 
 
 def test_dev_py_lists_the_users_commands():
