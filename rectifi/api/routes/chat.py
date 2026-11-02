@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.routing import Route
 
-from ... import tools
+from ... import tools, userctx
 from .. import ask, wire
 from ..errors import ApiError
 from ..inputs import api, ensure_db, query, read_json, text_field
@@ -32,7 +32,9 @@ MODE_CHOICES = ("auto", "rag", "plain", "crag", "self_rag", "full")      # "plai
 def uid_of(request: Request) -> str:
     """Whose memory: the signed-in person if the auth layer set one, else the one owner of this laptop."""
     value = getattr(request.state, "uid", None)
-    return str(value)[:200] if value else "owner"
+    if not value or value == userctx.OWNER_UID:          # multi-user mode says the int 1; the owner's memories stay under "owner"
+        return "owner"
+    return str(value)[:200]
 
 
 def _known(thread_id: str) -> dict:

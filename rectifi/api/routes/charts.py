@@ -17,7 +17,7 @@ from starlette.requests import Request
 from starlette.responses import StreamingResponse
 from starlette.routing import Route
 
-from ... import config, tools
+from ... import config, tools, userctx
 from ..errors import ApiError
 from ..inputs import api, ensure_db, int_field, path_int, read_json, text_field
 from ..wire import chart_detail, chart_summary, to_wire
@@ -148,7 +148,7 @@ async def _stream(graph_input, thread_id: str) -> StreamingResponse:
             _busy.release()
             emit(None)
 
-    threading.Thread(target=worker, name="rectifi-chart", daemon=True).start()
+    userctx.spawn(worker, name="rectifi-chart")        # keeps the signed-in person in the worker thread
 
     async def lines():
         while True:
