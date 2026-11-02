@@ -62,7 +62,10 @@ def index_document(store: PgVectorStore, doc: Document, corpus: str, progress: C
 
 
 def index_transactions(store: PgVectorStore, progress: Callable[[int], None] | None = None) -> dict:
-    """One chunk per transaction. Re-embeds a payment only when its sentence changed (say, it was recategorised)."""
+    """One chunk per transaction. Re-embeds a payment only when its sentence changed (say, it was recategorised).
+    Multi-user mode: never (the ledger's text is sealed and the library is plain, D8)."""
+    if config.multiuser():
+        return {"added": 0, "skipped": 0, "removed": 0}
     total = {"added": 0, "skipped": 0, "removed": 0}
     with connect() as conn:
         have = {r["txn_id"]: r["content_hash"] for r in conn.execute(
@@ -123,5 +126,11 @@ def reindex(embeddings: Embeddings, *, embed_model: str | None = None, corpora: 
                 core.rag_delete_missing("note", keep)
             out[corpus] = r
         if "txn" in corpora:
-            out["txn"] = index_transactions(store, progress)
+            if config.multiuser():
+                # D8: ledger text lives in sealed columns; the library must not hold a plain copy. Drop any copy left from before.
+                with connect() as conn:
+                    removed = conn.execute("DELETE FROM rag_chunks WHERE corpus = 'txn'").rowcount
+                out["txn"] = {"added": 0, "skipped": 0, "removed": removed}
+            else:
+                out["txn"] = index_transactions(store, progress)
     return out

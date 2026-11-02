@@ -1230,7 +1230,7 @@ def apply_classifications(items: list[dict]) -> dict:
                     """UPDATE transactions SET category_id = %s, category_source = 'llm', category_confidence = %s,
                               category_reason = %s, suggested_category_id = NULL, suggested_confidence = NULL, classify_state = 'done'
                        WHERE id = %s AND classify_state = 'pending' AND category_source = 'fallback'""",
-                    (cat["id"], confidence, (item.get("reason") or "the local model")[:120], item["id"]),
+                    (cat["id"], confidence, vault.seal((item.get("reason") or "the local model")[:120]), item["id"]),
                 ).rowcount
                 applied += n
             else:
@@ -1281,7 +1281,7 @@ def apply_category_to_similar(txn_id: int) -> int:
                       category_reason = %s, suggested_category_id = NULL, suggested_confidence = NULL,
                       classify_state = CASE WHEN classify_state = 'pending' THEN 'done' ELSE classify_state END
                WHERE id = ANY(%s) AND category_source = ANY(%s)""",
-            (base["category_id"], f"you taught Rectifi '{key}'"[:120], ids, list(RELABELLABLE_SOURCES)),
+            (base["category_id"], vault.seal(f"you taught Rectifi '{key}'"[:120]), ids, list(RELABELLABLE_SOURCES)),
         ).rowcount
 
 
@@ -1863,8 +1863,13 @@ def rag_delete_missing(corpus: str, keep_sources: list[str]) -> int:
 
 def rag_note_rows() -> list[dict]:
     """The person's own words: each weekly commitment and each transaction note, as [{source, title, content}].
-    This is the user's text, so a rupee figure in it counts as typed by the user."""
+    This is the user's text, so a rupee figure in it counts as typed by the user.
+
+    Multi-user mode (D8): both come from sealed columns (commitment, note, and the payee in the title), and this index is plain
+    text, so nothing is copied out. The notes the person uploads to the library are separate and still indexed."""
     out = []
+    if config.multiuser():
+        return out
     with connect() as conn:
         for r in conn.execute("SELECT week_start, commitment FROM weekly_reviews ORDER BY week_start").fetchall():
             out.append({"source": f"commitment:{r['week_start']}", "title": f"Weekly commitment, week of {r['week_start']}",
@@ -1901,7 +1906,7 @@ def rag_status(embed_model: str) -> dict:
         docs = {r["corpus"]: r["n"] for r in conn.execute("SELECT corpus, COUNT(*) AS n FROM rag_documents GROUP BY corpus").fetchall()}
         txns = conn.execute("SELECT COUNT(*) AS n FROM transactions").fetchone()["n"]
     return {"embed_model": embed_model, "chunks": {c: chunks.get(c, 0) for c in RAG_CORPORA}, "chunks_total": sum(chunks.values()),
-            "documents": {c: docs.get(c, 0) for c in ("guide", "note", "upload")}, "transactions": txns,
+            "documents": {c: docs.get(c, 0) for c in ("guide", "note", "upload")}, "transactions": 0 if config.multiuser() else txns,
             "other_model_chunks": other, "updated_at": newest}
 # ═══ WS-RAG: end ═══
 # ═══ WS-AI: end ═══

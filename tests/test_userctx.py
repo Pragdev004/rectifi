@@ -91,9 +91,7 @@ def test_a_new_person_is_seeded_with_their_own_categories_and_rules():
 
 # Files under rectifi/ that still start a bare thread. Each workstream removes its own entries when it moves to userctx.spawn
 # (WS-AI: ask.py, routes/charts.py, routes/knowledge.py, agent/jobs.py; WS-ALERTS: alerts.py). The list may only shrink.
-KNOWN_BARE_THREADS = {
-    "rectifi/agent/jobs.py", "rectifi/api/ask.py", "rectifi/api/routes/charts.py", "rectifi/api/routes/knowledge.py",
-}
+KNOWN_BARE_THREADS: set[str] = set()
 
 
 def test_no_new_bare_threads_under_rectifi():

@@ -86,7 +86,18 @@ def account_after_sign_in(ctx: userctx.UserContext) -> None:
 
 # ═══ WS-AI: begin ═══
 def ai_after_sign_in(ctx: userctx.UserContext) -> None:
-    """Owner only: requeue unfinished classify jobs and refresh the guides index."""
+    """Owner only: requeue unfinished classify jobs and refresh the guides index. A friend gets nothing here (D7: AI is
+    owner-only). Laptop mode never reaches this (the hook runs only in multi-user mode), and the start-up code still does both.
+    The work runs in a thread that keeps the owner's context; the reindex skips the 'txn' corpus in multi-user mode (D8)."""
+    from . import config
+
+    if not config.multiuser() or ctx.uid != userctx.OWNER_UID or ctx.key is None:
+        return
+    from .agent import jobs                                   # inside the function: rectifi.api must import without langchain
+    from .api.routes import knowledge
+
+    jobs.requeue_unfinished()                                 # puts the owner's unfinished jobs on the worker, each with this context
+    knowledge.auto_reindex(("guide", "note", "upload"))       # a thread (userctx.spawn); off when RECTIFI_NO_AUTO_REINDEX=1
 # ═══ WS-AI: end ═══
 
 
