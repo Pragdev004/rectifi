@@ -250,8 +250,8 @@ def _ghost_name(username: str) -> str:
 
 
 def _locked_seconds(row, now: float) -> int:
-    until = row["locked_epoch"]
-    return max(1, int(until - now + 0.999)) if until is not None and float(until) > now else 0
+    until = float(row["locked_epoch"]) if row["locked_epoch"] is not None else 0.0
+    return max(1, int(until - now + 0.999)) if until > now else 0
 
 
 def _recent_failures(row, now: float) -> list[float]:
