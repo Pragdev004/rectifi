@@ -39,6 +39,8 @@ def old_owner_data():
     result = importer.import_file(CSV, "hdfc-oct.csv", tools.list_accounts()[0]["id"])
     assert result.added > 0
     with as_user(1), db.connect() as conn:
+        conn.execute("UPDATE push_subscriptions SET label = 'Prag phone'")
+        conn.execute("INSERT INTO merchant_patterns (pattern, merchant, grp) VALUES ('tea tapri', 'Tea Tapri', 'Other')")
         conn.execute("INSERT INTO alert_rules (scope, target, period, cap) VALUES ('merchant', 'Chaayos', 'week', 400)")
         conn.execute("INSERT INTO alert_rules (scope, target, period, cap) VALUES ('merchant', 'Swiggy', 'week', 900)")
         conn.execute("INSERT INTO alert_rules (scope, target, period, cap) VALUES ('category', 'Food & Dining', 'month', 5000)")
@@ -323,3 +325,20 @@ def test_the_sign_in_drain_moves_signed_out_alert_text_to_the_data_key_and_leave
         assert "transactions" in seal_sweep.DRAINED_BY_CORE and "sms_inbox" in seal_sweep.DRAINED_BY_CORE
     finally:
         os.environ.pop("RECTIFI_MULTIUSER", None)
+
+
+def test_old_push_labels_and_taught_merchant_names_are_sealed_and_their_dedupe_hashes_match_the_write_path(owner):
+    seal_sweep.run(owner)
+    [sub] = raw("SELECT label FROM push_subscriptions")
+    assert sealed(sub["label"])
+    patterns = raw("SELECT pattern, merchant, pattern_blind FROM merchant_patterns")
+    assert len(patterns) == 2 and all(sealed(p["pattern"]) and sealed(p["merchant"]) for p in patterns)
+    with userctx.bound(owner):
+        assert {p["pattern_blind"] for p in patterns} == {vault.blind("chaayos"), vault.blind("tea tapri")}
+        with db.connect() as conn:
+            assert {r["merchant"] for r in conn.execute("SELECT merchant FROM merchant_patterns").fetchall()} == {"Chaayos", "Tea Tapri"}
+            assert conn.execute("SELECT label FROM push_subscriptions").fetchone()["label"] == "Prag phone"
+            titles = {r["title"] for r in conn.execute("SELECT title FROM alerts").fetchall()}
+        custom_key = [r["dedupe_key"] for r in raw("SELECT dedupe_key FROM alerts")]
+        assert f"streak:{vault.blind_ingest('Chaayos')}:2026-10-05:5" in custom_key       # exactly blind_ingest(name), as WS-ALERTS writes it
+    assert titles == {"T", "Chaayos again"}

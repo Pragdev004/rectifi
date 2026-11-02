@@ -89,8 +89,8 @@ Made {stamp}. One CSV per table, holding only your own rows.
 
 * Money is text with two decimals (for example 1250.50). Nothing was rounded or turned into a float.
 * Dates are ISO (2026-10-05); times are ISO with a time zone.
-* A text cell that would start with = + - or @ has a ' in front, so a spreadsheet shows it instead of running it.
-  Remove the ' if you want the original text. Numbers are never changed.
+* A text cell that would start with = + - or @ has a ' in front, so a spreadsheet shows it instead of running it as a
+  formula. Remove the ' if you want the original text. Numbers are never changed.
 * Files are UTF-8 (no byte order mark). In Excel use Data > From Text/CSV and pick UTF-8.
 * Not included: your password or keys, phone tokens, push addresses, keyed hashes, chart pictures, search vectors.
 * Your AI chat messages live in a separate store and are not in this export.
