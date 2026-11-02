@@ -83,5 +83,5 @@ export function visibleItems<T extends NavItem>(items: T[], status: AuthStatus |
 }
 
 export function visibleGroups(status: AuthStatus | undefined): { title: string; items: NavItem[] }[] {
-  return NAV_GROUPS.map((g) => ({ title: g.title, items: visibleItems(g.items, status) })).filter((g) => g.items.length > 0);
+  return NAV_GROUPS.map((g) => ({ title: g.title, items: visibleItems(g.items, status) }));
 }

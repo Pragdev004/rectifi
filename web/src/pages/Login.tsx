@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { safeNext, signInProblem, useAuthStatus, useSignIn } from "../api/auth";
 import { AuthScreen, authStyles as styles } from "../components/AuthScreen";
-import { Button, Field, TextInput } from "../components/forms";
+import { Button } from "../components/forms";
+import { TextBox } from "../components/TextBox";
 import { PasswordField } from "../components/PasswordField";
 import { Callout } from "../components/ui";
 
@@ -45,24 +46,8 @@ export default function LoginPage() {
         <form className={styles.form} onSubmit={(e) => void submit(e)} noValidate>
           {problem?.locked && <Callout tone="near" role="alert">{problem.message}</Callout>}
           {multi && (
-            <Field label="Username">
-              {(field) => (
-                <TextInput
-                  {...field}
-                  name="username"
-                  autoComplete="username"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  autoFocus
-                  value={username}
-                  onChange={(e) => {
-                    setUsername(e.target.value);
-                    if (signIn.error) signIn.reset();
-                  }}
-                />
-              )}
-            </Field>
+            <TextBox label="Username" name="username" autoComplete="username" autoFocus value={username}
+              onChange={(v) => { setUsername(v); if (signIn.error) signIn.reset(); }} />
           )}
           <PasswordField
             label="Password"
@@ -70,7 +55,6 @@ export default function LoginPage() {
             inputRef={input}
             autoComplete="current-password"
             autoFocus={!multi}
-            disabled={status.isPending}
             error={problem && !problem.locked ? problem.message : null}
             value={password}
             onChange={(v) => {

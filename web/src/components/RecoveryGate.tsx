@@ -1,6 +1,5 @@
-import { Download } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { canFinish, recoveryFileName, recoveryFileText, saveText } from "../lib/recovery";
+import { canFinish, RECOVERY_FILE, recoveryFileText, saveText } from "../lib/recovery";
 import { Button, Checkbox } from "./forms";
 import { Callout, CodeValue } from "./ui";
 import styles from "./RecoveryGate.module.css";
@@ -24,7 +23,7 @@ export function RecoveryGate({
   const open = canFinish({ downloaded, saved });
 
   function download() {
-    saveText(recoveryFileText(username, code), recoveryFileName(username));
+    saveText(recoveryFileText(username, code), RECOVERY_FILE);
     setDownloaded(true);
   }
 
@@ -33,20 +32,18 @@ export function RecoveryGate({
       <Callout tone="near" lead="This is the only time you will see this code.">
         <div className={styles.warn}>
           {intro}
-          <p>If you forget your password, this code is the only way back in. There is no email and no reset, and nobody can reset it for you.</p>
+          <p>If you forget your password, this code is the only way back in. There is no email and no reset.</p>
         </div>
       </Callout>
       <div className={styles.code}>
         <CodeValue value={code} label="recovery code" wrap />
       </div>
       <div className={styles.actions}>
-        <Button variant="secondary" block icon={<Download size={16} strokeWidth={1.5} aria-hidden="true" />} onClick={download}>
+        <Button variant="secondary" block onClick={download}>
           Download the code (.txt)
         </Button>
         <Checkbox label="I saved it somewhere safe" checked={saved} onChange={setSaved} />
-        <p className={styles.state} role="status">
-          {downloaded ? "Downloaded." : open ? "Marked as saved." : `Download the code or tick the box to go on.`}
-        </p>
+        {!open && <p className={styles.state}>Download the code or tick the box to go on.</p>}
       </div>
       {error && <Callout tone="over" role="alert">{error}</Callout>}
       <Button variant="primary" block disabled={!open} loading={finishing} loadingLabel={finishingLabel} onClick={onFinish}>

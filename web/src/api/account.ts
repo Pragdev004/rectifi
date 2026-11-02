@@ -37,4 +37,4 @@ export interface PrivacyFacts {
 }
 
 export const usePrivacy = () =>
-  useQuery({ queryKey: ["privacy"], queryFn: ({ signal }) => get<PrivacyFacts>("/privacy", signal), staleTime: 60_000, retry: false });
+  useQuery({ queryKey: ["privacy"], queryFn: ({ signal }) => get<PrivacyFacts>("/privacy", signal) });

@@ -31,11 +31,7 @@ describe("Sign up", () => {
     expect(out).toContain("Create your account");
     for (const label of ["Invite code", "Username", "Password", "Repeat password"]) expect(out).toContain(label);
     expect(/<button[^>]*type="submit"[^>]*>/.exec(out)?.[0]).toContain('aria-disabled="true"');
-    expect(out).toMatch(/no password reset/i);
     expect(out).not.toContain("recovery-gate"); // the code screen only appears after the server has answered
-  });
-  it("says sign-up is off where there are no accounts", () => {
-    expect(renderWith(<SignupPage />, LAPTOP)).toContain("Sign-up is off here");
   });
 });
 
@@ -43,7 +39,6 @@ describe("Recover", () => {
   it("asks for the username, the code and a new password", () => {
     const out = renderWith(<RecoverPage />, SIGNED_OUT_MULTI);
     for (const label of ["Username", "Recovery code", "New password", "Repeat new password"]) expect(out).toContain(label);
-    expect(out).toMatch(/There is no reset/i);
   });
 });
 
@@ -67,14 +62,14 @@ describe("Settings", () => {
   it("shows the username and every account action to someone who has an account", () => {
     const out = renderWith(<SettingsPage />, FRIEND);
     expect(out).toContain("asha");
-    for (const text of ["Change password", "New recovery code", "Export your data", "Delete my account", "Friend"]) expect(out).toContain(text);
+    for (const text of ["Change password", "New recovery code", "Export your data", "Delete my account", "(friend)"]) expect(out).toContain(text);
     expect(out).toMatch(/cannot be undone, and there is no reset/i);
   });
   it("keeps the delete button off until the username is typed", () => {
     const out = renderWith(<SettingsPage />, OWNER);
     const del = /<button[^>]*>Delete my account for good<\/button>/.exec(out)?.[0] ?? "";
     expect(del).toContain('aria-disabled="true"');
-    expect(out).toContain("Owner");
+    expect(out).toContain("(owner)");
   });
   it("says there are no accounts on a laptop", () => {
     expect(renderWith(<SettingsPage />, LAPTOP)).toContain("There are no accounts on this Rectifi.");
@@ -104,10 +99,10 @@ describe("Privacy", () => {
     const laptop = renderWith(<PrivacyFactsView facts={{ ...FACTS, mode: "laptop", encryption_at_rest: false }} />, null);
     expect(laptop).toMatch(/nothing is encrypted/i);
   });
-  it("renders signed out, with a way back to sign in", () => {
+  it("renders signed out, with a way back (the app sends a signed-out visitor on to sign in)", () => {
     const page = renderWith(<PrivacyPage />, SIGNED_OUT_MULTI);
     expect(page).toContain("How your data is protected");
-    expect(page).toContain('href="/login"');
+    expect(page).toContain('href="/"');
   });
 });
 

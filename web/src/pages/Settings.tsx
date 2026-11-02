@@ -1,63 +1,60 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "wouter";
 import { navigate } from "wouter/use-browser-location";
 import { changePassword, deleteAccount, exportAccount, newRecoveryCode } from "../api/account";
-import { hasAccount, useAuthStatus, useSignOutEverywhere } from "../api/auth";
-import { fieldProblem, formProblem, problemOf, useSecretCall } from "../api/secret";
-import { Button, Field, LinkButton, TextInput } from "../components/forms";
+import { hasAccount, useAuthStatus } from "../api/auth";
+import { fieldProblem, problemOf, useSecretCall } from "../api/secret";
+import { Button, LinkButton } from "../components/forms";
+import { NewPasswordFields, useNewPassword } from "../components/NewPasswordFields";
 import { PageHeader } from "../components/PageHeader";
 import { PasswordField } from "../components/PasswordField";
 import { RecoveryGate } from "../components/RecoveryGate";
-import { Callout, EmptyState, InlineStatus, Section, Skeleton, Stamp } from "../components/ui";
-import { MIN_PASSWORD, saveBlob } from "../lib/recovery";
+import { SecretForm } from "../components/SecretForm";
+import { TextBox } from "../components/TextBox";
+import { Callout, EmptyState, InlineStatus, Skeleton } from "../components/ui";
+import { saveBlob } from "../lib/recovery";
 import s from "./settings.module.css";
+
+function Panel({ id, title, danger, children }: { id: string; title: string; danger?: boolean; children: ReactNode }) {
+  return (
+    <section className={danger ? `${s.panel} ${s.danger}` : s.panel} aria-labelledby={id}>
+      <h2 id={id} className={s.panelTitle}>{title}</h2>
+      {children}
+    </section>
+  );
+}
 
 function ChangePassword() {
   const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [again, setAgain] = useState("");
-  const [mismatch, setMismatch] = useState(false);
+  const pw = useNewPassword();
   const [done, setDone] = useState(false);
   const call = useSecretCall(changePassword);
   const problem = problemOf(call.error);
-  const FIELDS = ["current", "new"];
+  const edit = () => { call.reset(); setDone(false); };
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function submit() {
     if (call.pending) return;
     setDone(false);
-    if (next !== again) {
-      setMismatch(true);
-      return;
-    }
-    setMismatch(false);
-    const out = await call.run({ current, new: next });
-    if (out) {
+    if (!pw.check()) return;
+    if (await call.run({ current, new: pw.password })) {
       setCurrent("");
-      setNext("");
-      setAgain("");
+      pw.clear();
       setDone(true);
     }
   }
   return (
-    <section className={s.panel} aria-labelledby="pw-h">
-      <h2 id="pw-h" className={s.panelTitle}>Change password</h2>
-      <p className={s.muted}>Other devices are signed out when you change it. Your sealed text stays readable. Your recovery code stays the same.</p>
-      <form className={s.form} onSubmit={(e) => void submit(e)} noValidate>
-        {formProblem(problem, FIELDS) && <Callout tone="near" role="alert">{formProblem(problem, FIELDS)}</Callout>}
+    <Panel id="pw-h" title="Change password">
+      <SecretForm className={s.form} problem={problem} fields={["current", "new"]} onSubmit={submit}>
         <PasswordField label="Current password" name="current-password" autoComplete="current-password" error={fieldProblem(problem, "current")}
-          value={current} onChange={(v) => { setCurrent(v); call.reset(); setDone(false); }} />
-        <PasswordField label="New password" name="new-password" autoComplete="new-password" hint={`At least ${MIN_PASSWORD} characters.`}
-          error={fieldProblem(problem, "new")} value={next} onChange={(v) => { setNext(v); setMismatch(false); call.reset(); setDone(false); }} />
-        <PasswordField label="Repeat new password" name="repeat-password" autoComplete="new-password" error={mismatch ? "The two passwords are not the same." : null}
-          value={again} onChange={(v) => { setAgain(v); setMismatch(false); }} />
+          value={current} onChange={(v) => { setCurrent(v); edit(); }} />
+        <NewPasswordFields label="New password" pw={pw} error={fieldProblem(problem, "new")} onEdit={edit} />
         <div className={s.row}>
-          <Button type="submit" variant="primary" loading={call.pending} loadingLabel="Saving…" disabled={!current || !next || !again}>Change password</Button>
+          <Button type="submit" variant="primary" loading={call.pending} loadingLabel="Saving…" disabled={!current || !pw.filled}>Change password</Button>
           {done && <InlineStatus kind="saved">Password changed.</InlineStatus>}
         </div>
-      </form>
-    </section>
+      </SecretForm>
+    </Panel>
   );
 }
 
@@ -67,28 +64,20 @@ function NewCode({ username }: { username: string }) {
   const call = useSecretCall(newRecoveryCode);
   const problem = problemOf(call.error);
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (call.pending || !password) return;
-    const out = await call.run(password);
+  async function submit() {
+    const out = password && !call.pending ? await call.run(password) : undefined;
     if (out) {
       setCode(out.recovery_code);
       setPassword("");
     }
   }
   return (
-    <section className={s.panel} aria-labelledby="rc-h">
-      <h2 id="rc-h" className={s.panelTitle}>New recovery code</h2>
+    <Panel id="rc-h" title="New recovery code">
       {code === null ? (
-        <>
-          <p className={s.muted}>Lost or shared your code? Make a new one. The old code stops working at once.</p>
-          <form className={s.form} onSubmit={(e) => void submit(e)} noValidate>
-            {problem && <Callout tone="near" role="alert">{problem.message}</Callout>}
-            <PasswordField label="Your password" name="current-password" autoComplete="current-password"
-              value={password} onChange={(v) => { setPassword(v); call.reset(); }} />
-            <div><Button type="submit" variant="secondary" loading={call.pending} loadingLabel="Making it…" disabled={!password}>Make a new recovery code</Button></div>
-          </form>
-        </>
+        <SecretForm className={s.form} problem={problem} fields={[]} onSubmit={submit}>
+          <PasswordField label="Your password" name="current-password" autoComplete="current-password" value={password} onChange={(v) => { setPassword(v); call.reset(); }} />
+          <div><Button type="submit" variant="secondary" loading={call.pending} loadingLabel="Making it…" disabled={!password}>Make a new recovery code</Button></div>
+        </SecretForm>
       ) : (
         <RecoveryGate
           code={code}
@@ -100,22 +89,19 @@ function NewCode({ username }: { username: string }) {
           intro={<p>The old code no longer works. Use this one from now on.</p>}
         />
       )}
-    </section>
+    </Panel>
   );
 }
 
 function Export() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   async function run() {
     setBusy(true);
     setError(null);
-    setSaved(false);
     try {
       const { blob, filename } = await exportAccount();
       saveBlob(blob, filename ?? "rectifi-export.zip");
-      setSaved(true);
     } catch (e) {
       setError(problemOf(e)?.message ?? "The export did not work. Try again.");
     } finally {
@@ -123,15 +109,10 @@ function Export() {
     }
   }
   return (
-    <section className={s.panel} aria-labelledby="ex-h">
-      <h2 id="ex-h" className={s.panelTitle}>Export your data</h2>
-      <p className={s.muted}>A ZIP of CSV files with your accounts, entries, budgets and alerts. Amounts are text, so they stay exact. Open it in Excel with Data, From Text/CSV, UTF-8.</p>
+    <Panel id="ex-h" title="Export your data">
       {error && <Callout tone="near" role="alert">{error}</Callout>}
-      <div className={s.row}>
-        <Button variant="secondary" loading={busy} loadingLabel="Preparing…" onClick={() => void run()}>Download my data (.zip)</Button>
-        {saved && <InlineStatus kind="saved">Downloaded.</InlineStatus>}
-      </div>
-    </section>
+      <div><Button variant="secondary" loading={busy} loadingLabel="Preparing…" onClick={() => void run()}>Download my data (.zip)</Button></div>
+    </Panel>
   );
 }
 
@@ -141,13 +122,10 @@ function DeleteAccount({ username }: { username: string }) {
   const [typed, setTyped] = useState("");
   const call = useSecretCall(deleteAccount);
   const problem = problemOf(call.error);
-  const FIELDS = ["password", "confirm_username"];
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function submit() {
     if (call.pending || !password || !typed.trim()) return;
-    const out = await call.run({ password, confirm_username: typed.trim() });
-    if (out) {
+    if (await call.run({ password, confirm_username: typed.trim() })) {
       setPassword("");
       setTyped("");
       qc.clear();
@@ -155,72 +133,42 @@ function DeleteAccount({ username }: { username: string }) {
     }
   }
   return (
-    <section className={`${s.panel} ${s.danger}`} aria-labelledby="del-h">
-      <h2 id="del-h" className={s.panelTitle}>Delete my account</h2>
+    <Panel id="del-h" title="Delete my account" danger>
       <Callout tone="over" lead="This cannot be undone, and there is no reset.">
-        Every entry, account, budget and alert you own is deleted for good. Backups can keep old sealed copies for a few days. Download your data first if you want it.
+        Everything you own is deleted. Backups can keep sealed copies for a few days.
       </Callout>
-      <form className={s.form} onSubmit={(e) => void submit(e)} noValidate>
-        {formProblem(problem, FIELDS) && <Callout tone="near" role="alert">{formProblem(problem, FIELDS)}</Callout>}
+      <SecretForm className={s.form} problem={problem} fields={["password", "confirm_username"]} onSubmit={submit}>
         <PasswordField label="Your password" name="current-password" autoComplete="current-password" error={fieldProblem(problem, "password")}
           value={password} onChange={(v) => { setPassword(v); call.reset(); }} />
-        <Field label={`Type your username (${username}) to confirm`} error={fieldProblem(problem, "confirm_username")}>
-          {(field) => (
-            <TextInput {...field} name="confirm-username" autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={typed}
-              onChange={(e) => { setTyped(e.target.value); call.reset(); }} />
-          )}
-        </Field>
+        <TextBox label={`Type your username (${username}) to confirm`} name="confirm-username" error={fieldProblem(problem, "confirm_username")}
+          value={typed} onChange={(v) => { setTyped(v); call.reset(); }} />
         <div>
           <Button type="submit" variant="danger" loading={call.pending} loadingLabel="Deleting…"
             disabled={!password || typed.trim().toLowerCase() !== username.toLowerCase()}>
             Delete my account for good
           </Button>
         </div>
-      </form>
-    </section>
-  );
-}
-
-function Devices() {
-  const out = useSignOutEverywhere();
-  return (
-    <section className={s.panel} aria-labelledby="dev-h">
-      <h2 id="dev-h" className={s.panelTitle}>Devices</h2>
-      <p className={s.muted}>Lost a phone or used a shared computer? Sign out everywhere.</p>
-      <div><Button variant="secondary" loading={out.isPending} loadingLabel="Signing out…" onClick={() => out.mutate()}>Sign out on every device</Button></div>
-    </section>
+      </SecretForm>
+    </Panel>
   );
 }
 
 export default function SettingsPage() {
-  const status = useAuthStatus();
-  const data = status.data;
+  const data = useAuthStatus().data;
   return (
     <>
-      <PageHeader name="Settings" title="Your account" sub="Password, recovery code, export and delete." />
+      <PageHeader name="Settings" title="Your account" sub={data?.username && <>Signed in as <strong data-testid="settings-username">{data.username}</strong> ({data.is_owner ? "owner" : "friend"})</>} />
       {!data ? (
         <Skeleton height={160} />
       ) : !hasAccount(data) || !data.username ? (
         <EmptyState title="There are no accounts on this Rectifi." actions={<LinkButton to="/" variant="primary">Go to Overview</LinkButton>}>
-          Settings are for a Rectifi where people sign up with an invite. This one has one person.
+          Settings are for a Rectifi where people sign up with an invite.
         </EmptyState>
       ) : (
         <div className={s.page}>
-          <Section eyebrow="Account">
-            <div className={s.panel}>
-              <div className={s.who}>
-                <span>Signed in as</span>
-                <strong data-testid="settings-username">{data.username}</strong>
-                <Stamp tone={data.is_owner ? "accent" : "neutral"}>{data.is_owner ? "Owner" : "Friend"}</Stamp>
-              </div>
-              <div className={s.links}>
-                <Link href="/privacy">How your data is protected</Link>
-              </div>
-            </div>
-          </Section>
+          <Link href="/privacy" className={s.link}>How your data is protected</Link>
           <ChangePassword />
           <NewCode username={data.username} />
-          <Devices />
           <Export />
           <DeleteAccount username={data.username} />
         </div>

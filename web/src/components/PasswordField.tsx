@@ -5,7 +5,7 @@ import styles from "./AuthScreen.module.css";
 
 /** A password box with a show/hide button. The value belongs to the caller's state and is cleared by the caller after it is sent. */
 export function PasswordField({
-  label, value, onChange, autoComplete, error, hint, name, inputRef, autoFocus, disabled,
+  label, value, onChange, autoComplete, error, hint, name, inputRef, autoFocus,
 }: {
   label: string;
   value: string;
@@ -16,7 +16,6 @@ export function PasswordField({
   name: string;
   inputRef?: Ref<HTMLInputElement>;
   autoFocus?: boolean;
-  disabled?: boolean;
 }) {
   const [shown, setShown] = useState(false);
   return (
@@ -34,7 +33,6 @@ export function PasswordField({
             autoCorrect="off"
             spellCheck={false}
             autoFocus={autoFocus}
-            disabled={disabled}
             value={value}
             onChange={(e) => onChange(e.target.value)}
           />

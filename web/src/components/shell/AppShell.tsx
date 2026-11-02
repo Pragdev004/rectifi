@@ -2,7 +2,7 @@ import { BellRing, BookText, Ellipsis, House, LogOut, MessageSquare, Plus, WifiO
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { useSignOut, useAuthStatus, useIsOwner, isOwnerView } from "../../api/auth";
+import { useSignOut, useAuthStatus, useIsOwner } from "../../api/auth";
 import { useChatStatus } from "../../api/chat";
 import { useOffline } from "../../api/client";
 import { cx } from "../../lib/cx";
@@ -99,12 +99,8 @@ function TopBar({ path, setSlot }: { path: string; setSlot: (el: HTMLElement | n
   );
 }
 
-/** What the More sheet lists. A friend has Alerts in the bottom bar (where the owner has Ask), so it is not listed twice. */
-function useMoreItems(): NavItem[] {
-  const status = useAuthStatus().data;
-  const owner = isOwnerView(status);
-  return visibleItems(MORE_ITEMS, status).filter((i) => owner || i.to !== "/alerts");
-}
+/** What the More sheet lists for this person. */
+const useMoreItems = (): NavItem[] => visibleItems(MORE_ITEMS, useAuthStatus().data);
 
 function BottomNav({ path, onMore }: { path: string; onMore: () => void }) {
   const owner = useIsOwner();

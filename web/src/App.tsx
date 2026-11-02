@@ -57,7 +57,7 @@ function ownerOnly(Page: React.ComponentType): React.ComponentType {
     if (auth.data && !isOwnerView(auth.data)) {
       return (
         <EmptyState title="This page is for the owner." actions={<LinkButton to="/" variant="primary">Go to Overview</LinkButton>}>
-          The assistant, charts, library, memory and traces are only for the person who runs this Rectifi. Your own data is never sent to a model.
+          Ask, Charts, Library, Memory and Traces are only for the person who runs this Rectifi.
         </EmptyState>
       );
     }

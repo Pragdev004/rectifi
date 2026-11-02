@@ -7,5 +7,4 @@
 .who { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); align-items: center; }
 .who strong { font-family: var(--font-figures); overflow-wrap: anywhere; }
 .row { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
-.links { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-4); }
-.links a { display: inline-flex; align-items: center; min-height: 44px; color: var(--c-accent); }
+.link { display: inline-flex; align-items: center; min-height: 44px; color: var(--c-accent); }

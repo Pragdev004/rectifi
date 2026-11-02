@@ -1,52 +1,52 @@
 import { Link } from "wouter";
 import { usePrivacy, type PrivacyFacts } from "../api/account";
-import { useAuthStatus } from "../api/auth";
 import { AuthScreen } from "../components/AuthScreen";
-import { Callout, Skeleton } from "../components/ui";
+import { Callout } from "../components/ui";
 import s from "./privacy.module.css";
 
 /** The first lines of the page: what mode this is and whether the text is encrypted. Facts come from the server; this only words them. */
 export function modeSentence(f: PrivacyFacts): string {
   return f.mode === "multiuser"
-    ? "This Rectifi is shared. Each person signs up with an invite and has their own account."
-    : "This Rectifi is in laptop mode. It has one person and nothing is encrypted. The data stays on the computer it runs on.";
+    ? "This Rectifi is shared. Each person signs up with an invite."
+    : "This Rectifi is in laptop mode: one person, nothing is encrypted, and the data stays on this computer.";
 }
 
 export function encryptionSentence(f: PrivacyFacts): string {
   return f.encryption_at_rest
-    ? "Text that could identify you is encrypted in the database (sealed) with a key made from your password."
-    : "Nothing is encrypted in the database in laptop mode. Anyone who can open the database can read it.";
+    ? "Text that could identify you is sealed (encrypted) with a key made from your password."
+    : "Anyone who can open the database can read it.";
 }
 
 export function modelSentence(f: PrivacyFacts): string {
   const where = f.model_provider === "local" ? "on this server's own machine" : "in the cloud, outside this server";
-  const friends = f.ai_for_friends
-    ? "Friends' data can be sent to it."
-    : "Friends' data is never sent to any model. The model works only for the owner.";
+  const friends = f.ai_for_friends ? "Friends' data can be sent to it." : "Friends' data is never sent to any model.";
   return `The model that sorts payments and answers the owner's chat runs ${where} (${f.model}). ${friends}`;
+}
+
+function Group({ title, note, names, brand }: { title: string; note: string; names: string[]; brand?: boolean }) {
+  return (
+    <>
+      <h3>{title}</h3>
+      <p className={s.muted}>{note}</p>
+      <ul className={s.chips} aria-label={title}>
+        {names.map((name) => <li key={name} className={brand ? s.brand : undefined}><code>{name}</code></li>)}
+      </ul>
+    </>
+  );
 }
 
 export function PrivacyFactsView({ facts: f }: { facts: PrivacyFacts }) {
   return (
     <div className={s.page} data-testid="privacy-facts">
-      <section aria-labelledby="pv-sum">
-        <h2 id="pv-sum">In short</h2>
+      <section>
+        <h2>In short</h2>
         <p className={s.lead}>{modeSentence(f)}</p>
         <p>{encryptionSentence(f)}</p>
         <p>{modelSentence(f)}</p>
-        <dl className={s.facts}>
-          <div><dt>Mode</dt><dd data-testid="privacy-mode">{f.mode === "multiuser" ? "Shared (multi-user)" : "Laptop (one person)"}</dd></div>
-          <div><dt>Encrypted at rest</dt><dd>{f.encryption_at_rest ? "Yes" : "No"}</dd></div>
-          <div><dt>Model runs</dt><dd>{f.model_provider === "local" ? "Locally" : "In the cloud"} ({f.model})</dd></div>
-          <div><dt>Backups kept for</dt><dd>{f.backup_days} days</dd></div>
-        </dl>
+        <p>Backups are kept for {f.backup_days} days.</p>
       </section>
-
-      <section aria-labelledby="pv-who">
-        <h2 id="pv-who">Who can read what</h2>
-        <p className={s.muted}>
-          Plain data means amounts, dates, categories, account names, last 4 digits and spending caps. Sealed text means payees, notes, SMS text and similar.
-        </p>
+      <section>
+        <h2>Who can read what</h2>
         <ul className={s.rows}>
           {f.who_can_read.map((row) => (
             <li key={row.who} className={s.row}>
@@ -57,44 +57,19 @@ export function PrivacyFactsView({ facts: f }: { facts: PrivacyFacts }) {
           ))}
         </ul>
       </section>
-
-      <section aria-labelledby="pv-sealed">
-        <h2 id="pv-sealed">What is sealed</h2>
-        <p className={s.muted}>These columns are stored encrypted for each person. The database refuses plain text in them.</p>
-        <ul className={s.chips} aria-label="Sealed fields" data-testid="privacy-sealed">
-          {f.sealed_fields.map((name) => <li key={name}><code>{name}</code></li>)}
-        </ul>
-        <h3>Keyed hashes</h3>
-        <p className={s.muted}>These are one-way fingerprints, used to spot duplicates without storing the text.</p>
-        <ul className={s.chips} aria-label="Keyed hash fields" data-testid="privacy-hashed">
-          {f.keyed_hash_fields.map((name) => <li key={name}><code>{name}</code></li>)}
-        </ul>
+      <section>
+        <h2>What is stored how</h2>
+        <Group title="Sealed" names={f.sealed_fields} note="Encrypted per person." />
+        <Group title="Keyed hashes" names={f.keyed_hash_fields} note="One-way fingerprints." />
+        <Group title="Plain, on purpose" names={f.plain_fields} note="Alerts must work while you are signed out." />
+        <Group title="Shops stored by name" names={f.merchant_allowlist.map((b) => b.name)} brand
+          note="These shop names are plain, so a cap on them can fire while you are signed out." />
+        <Group title="The owner's own AI tables" names={f.unsealed_owner_tables} note="Not sealed yet. Only the owner's data." />
       </section>
-
-      <section aria-labelledby="pv-plain">
-        <h2 id="pv-plain">What stays readable, on purpose</h2>
-        <p className={s.muted}>Alerts and the phone gateway must work while you are signed out, so these are plain.</p>
-        <ul className={s.chips} aria-label="Plain fields" data-testid="privacy-plain">
-          {f.plain_fields.map((name) => <li key={name}><code>{name}</code></li>)}
-        </ul>
-        <h3>Shops whose name is stored in plain text</h3>
-        <p className={s.muted}>A payment to one of these well-known shops also has its name stored in plain text, so a cap on it can fire while you are signed out. Every other payee is sealed.</p>
-        <ul className={s.chips} aria-label="Allow-listed shops" data-testid="privacy-brands">
-          {f.merchant_allowlist.map((b) => <li key={b.key} className={s.brand}><code>{b.name}</code></li>)}
-        </ul>
-        <h3>The owner's own AI tables</h3>
-        <p className={s.muted}>These are not sealed in this phase. They hold only the owner's own data.</p>
-        <ul className={s.chips} aria-label="Owner-only tables" data-testid="privacy-owner-tables">
-          {f.unsealed_owner_tables.map((name) => <li key={name}><code>{name}</code></li>)}
-        </ul>
-      </section>
-
-      <section aria-labelledby="pv-limits">
-        <h2 id="pv-limits">What this does not protect</h2>
-        <Callout tone="near" lead="Read this before you join.">
-          {f.recovery}
-        </Callout>
-        <ul className={s.list} data-testid="privacy-limits">
+      <section>
+        <h2>What this does not protect</h2>
+        <Callout tone="near">{f.recovery}</Callout>
+        <ul className={s.list}>
           {f.limits.map((line) => <li key={line}>{line}</li>)}
         </ul>
       </section>
@@ -104,19 +79,14 @@ export function PrivacyFactsView({ facts: f }: { facts: PrivacyFacts }) {
 
 export default function PrivacyPage() {
   const facts = usePrivacy();
-  const status = useAuthStatus();
-  const inside = status.data ? !status.data.required || status.data.signed_in : false;
-  const back = inside ? { to: "/", label: "Back to Rectifi" } : { to: "/login", label: "Back to sign in" };
   return (
     <AuthScreen eyebrow="Privacy" title="How your data is protected" wide>
       {facts.data ? (
         <PrivacyFactsView facts={facts.data} />
-      ) : facts.isError ? (
-        <p className={s.errorText} role="alert">Can't reach Rectifi right now. Reload this page to try again.</p>
       ) : (
-        <Skeleton height={200} />
+        <p className={s.muted} role="status">{facts.isError ? "Can't reach Rectifi right now. Reload to try again." : "Loading…"}</p>
       )}
-      <Link href={back.to} className={s.back}>{back.label}</Link>
+      <Link href="/" className={s.back}>Back to Rectifi</Link>
     </AuthScreen>
   );
 }

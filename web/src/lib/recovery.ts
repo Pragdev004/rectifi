@@ -5,10 +5,7 @@ export function canFinish(state: { downloaded: boolean; saved: boolean }): boole
   return state.downloaded || state.saved;
 }
 
-export function recoveryFileName(username: string): string {
-  const safe = username.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 40) || "account";
-  return `rectifi-recovery-code-${safe}.txt`;
-}
+export const RECOVERY_FILE = "rectifi-recovery-code.txt";
 
 /** The text of the downloaded file. It says what the code is for, because a file called "code.txt" found a year later must explain itself. */
 export function recoveryFileText(username: string, code: string): string {
@@ -18,11 +15,8 @@ export function recoveryFileText(username: string, code: string): string {
     `Account: ${username}`,
     `Code:    ${code}`,
     "",
-    "This code is the only way back into your account if you forget your password.",
-    "There is no email and no reset. Rectifi's owner cannot reset it either.",
-    "Without your password and this code, your sealed text is gone for good.",
-    "Each code works once. When you use it, you get a new one.",
-    "Keep this file somewhere private (a password manager is best). Do not share it.",
+    "The only way back in if you forget your password. There is no email and no reset.",
+    "Each code works once. Keep this file private.",
     "",
   ].join("\r\n");
 }

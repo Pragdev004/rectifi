@@ -60,7 +60,8 @@ async function toError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, "error", "Something went wrong. Try again.");
 }
 
-export async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+/** One round trip. Same headers, same error shape for every call; the caller reads the body it wants (JSON, or a file). */
+async function send(method: string, path: string, options: RequestOptions = {}): Promise<Response> {
   const headers: Record<string, string> = { [REQUEST_HEADER]: "1", Accept: "application/json" };
   let body: BodyInit | undefined;
   if (options.form) {
@@ -86,27 +87,17 @@ export async function request<T>(method: string, path: string, options: RequestO
     if (err.code === "auth_required") window.dispatchEvent(new Event("rectifi:auth-required")); // api/auth.ts sends the person to /login
     throw err;
   }
-  return (await res.json()) as T;
+  return res;
 }
 
-/** A file the server sends back (the account export ZIP). Same headers and error shape as `request`; the answer is a Blob and the file name it suggests. */
+export async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+  return (await send(method, path, options)).json() as Promise<T>;
+}
+
+/** A file the server sends back (the account export ZIP), with the file name it suggests. */
 export async function requestBlob(path: string, signal?: AbortSignal): Promise<{ blob: Blob; filename: string | null }> {
-  let res: Response;
-  try {
-    res = await fetch(`/api${path}`, { method: "GET", headers: { [REQUEST_HEADER]: "1" }, signal, cache: "no-store", credentials: "same-origin" });
-  } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") throw e;
-    setOffline(true);
-    throw new NetworkError();
-  }
-  setOffline(false);
-  if (!res.ok) {
-    const err = await toError(res);
-    if (err.code === "auth_required") window.dispatchEvent(new Event("rectifi:auth-required"));
-    throw err;
-  }
-  const named = /filename="?([^";]+)"?/i.exec(res.headers.get("Content-Disposition") ?? "");
-  return { blob: await res.blob(), filename: named?.[1] ?? null };
+  const res = await send("GET", path, { signal });
+  return { blob: await res.blob(), filename: /filename="?([^";]+)"?/i.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? null };
 }
 
 export const get = <T,>(path: string, signal?: AbortSignal) => request<T>("GET", path, { signal });

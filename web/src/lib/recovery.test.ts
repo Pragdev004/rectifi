@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canFinish, recoveryFileName, recoveryFileText } from "./recovery";
+import { canFinish, recoveryFileText } from "./recovery";
 
 describe("the recovery code gate", () => {
   it("is shut until the code is downloaded or the box is ticked", () => {
@@ -17,11 +17,5 @@ describe("the recovery file", () => {
     expect(text).toContain("asha");
     expect(text).toMatch(/only way back/i);
     expect(text).toMatch(/no email and no reset/i);
-  });
-  it("is named from a safe version of the username", () => {
-    expect(recoveryFileName("asha")).toBe("rectifi-recovery-code-asha.txt");
-    expect(recoveryFileName("../../evil name")).toBe("rectifi-recovery-code-.._.._evil_name.txt");
-    expect(recoveryFileName("")).toBe("rectifi-recovery-code-account.txt");
-    expect(recoveryFileName("x".repeat(80)).length).toBeLessThan(80);
   });
 });
