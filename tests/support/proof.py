@@ -11,6 +11,7 @@ printed, and nothing connects to a database whose name does not end in `_test`.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import shutil
@@ -60,7 +61,7 @@ def reset_limiters() -> None:
             continue
         limiter = getattr(module, "limiter", None)
         for owner in (limiter, module):
-            for name in ("reset_memory", "reset_limits", "reset_limiter"):
+            for name in ("reset_memory", "reset_limits", "reset_limiter", "reset_limiters"):
                 fn = getattr(owner, name, None) if owner is not None else None
                 if callable(fn):
                     fn()
@@ -223,8 +224,14 @@ class Canaries:
         self.items[label] = (word, must_find)
         return word
 
+    PLAIN_BY_PLAN = ("acct", "acct2")      # account names stay plain (plan D4 and section 1: the signed-out gateway needs them)
+
     def words(self) -> list[str]:
         return [w for w, _ in self.items.values()]
+
+    def sealed_words(self) -> dict[str, str]:
+        """label -> word, for every canary the dump must NOT show (everything except what the plan keeps plain)."""
+        return {label: w for label, (w, _) in self.items.items() if label not in self.PLAIN_BY_PLAN}
 
     def must_find(self) -> dict[str, str]:
         return {label: w for label, (w, must) in self.items.items() if must}
@@ -304,6 +311,12 @@ def plain_sealed_cells(uid: int) -> int:
                 if spec.when:
                     where += f' AND "{spec.when[0]}" = \'{spec.when[1]}\''
                 try:
+                    if table == "alert_rules":      # plan D3/D4: only a cap on a custom merchant is sealed; brand, category and total targets stay plain
+                        from rectifi import merchant_allowlist
+
+                        names = [r[0] for r in conn.execute(f'SELECT "{column}" FROM "{table}" WHERE {where.replace(chr(37), chr(37) * 2)} AND scope = %s', ("merchant",)).fetchall()]
+                        total += sum(1 for n in names if merchant_allowlist.plain_key(n) is None)
+                        continue
                     total += int(conn.execute(f'SELECT count(*) FROM "{table}" WHERE {where}').fetchone()[0])
                 except psycopg.errors.UndefinedColumn:
                     pass
@@ -419,6 +432,18 @@ def pin_clock(monkeypatch) -> None:
 
     monkeypatch.setattr(tools, "today", lambda: TODAY)
     monkeypatch.setattr(alerts, "_clock", Clock(), raising=False)
+
+
+def baseline_alerts(*uids: int) -> None:
+    """What is in the ledger now is history, not news: move each person's alert watermark to their newest transaction, the way the
+    first sweep does for old rows. (A sweep that sees fresh test rows would treat them as news and use up the cap steps.)"""
+    from rectifi import alerts
+
+    for uid in uids:
+        with raw_conn(uid) as conn:
+            top = conn.execute("SELECT COALESCE(MAX(id), 0) FROM transactions").fetchone()[0]
+            conn.execute("INSERT INTO app_settings (key, value) VALUES (%s, %s::jsonb) ON CONFLICT (user_id, key) "
+                         "DO UPDATE SET value = EXCLUDED.value", (alerts.WATERMARK_KEY, json.dumps({"txn_id": int(top)})))
 
 
 class PushRecorder:

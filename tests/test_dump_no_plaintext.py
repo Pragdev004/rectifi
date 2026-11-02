@@ -195,12 +195,13 @@ def test_a_friends_text_is_never_readable_in_a_dump(monkeypatch, caplog):
         snapshots["dump"] = proof.dump_database()
 
     extra = flows(friend.client, gw, c, Auth(friend), on_signed_out=while_signed_out)
-    words, secrets = {k: w for k, (w, _) in c.items.items()}, secrets_of(friend, extra)
+    words, secrets = c.sealed_words(), secrets_of(friend, extra)
     problems += check("signed out", snapshots["dump"], words, secrets, [friend.uid])
     assert any(owner == friend.uid and v and v.startswith("rs1.") for _, _, owner, v in snapshots["dump"].cells), \
         "a signed-out SMS should be stored as an rs1 envelope (sealed to the person's public key), and none is"
     assert count_envelopes(friend.uid, "rs1.") > 0
 
+    friend.login()          # the one-minute ticker has no data key, so an alert it wrote in the flow is an rs1 envelope until the next sign-in
     for _ in range(60):                                        # sign-in opens the rs1 values (hooks.after_sign_in): give it a moment
         if count_envelopes(friend.uid, "rs1.") == 0:
             break
@@ -246,7 +247,7 @@ def test_the_owners_old_plain_data_is_gone_from_a_dump_after_the_sweep(monkeypat
 
     after = proof.Canaries("p")
     extra = flows(owner.client, gw, after, Auth(owner))
-    words = {k: w for k, (w, _) in {**before.items, **after.items}.items()}
+    words = {**before.sealed_words(), **after.sealed_words()}
     secrets = secrets_of(owner, extra)
     problems = check("owner after sweep", proof.dump_database(), words, secrets, [1])
     problems += log_problems(caplog, words, secrets)

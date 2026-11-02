@@ -92,7 +92,8 @@ def test_two_people_side_by_side_see_only_their_own(browser, mu_server):
         assert payee.startswith(("rx1.", "rs1.")) and note.startswith(("rx1.", "rs1.")), f"{person.username}'s text is not sealed in the table"
     # B reaches for A's payment by id: refused, and A's page still shows it after a reload
     before = proof.table_checksums(a.uid)
-    assert b.call("DELETE", f"/api/transactions/{a_txn}").status in (403, 404)
+    gone = b.call("DELETE", f"/api/transactions/{a_txn}")      # delete is idempotent on purpose: an id B cannot see answers 200 {"deleted": false}
+    assert gone.status in (403, 404) or (gone.status == 200 and gone.json() == {"deleted": False}), (gone.status, gone.text()[:80])
     assert b.call("PATCH", f"/api/transactions/{a_txn}", {"note": "hijacked"}).status in (403, 404)
     assert proof.table_checksums(a.uid) == before
     assert wa in a.read_ledger().lower()
@@ -124,7 +125,7 @@ def test_signing_out_and_in_again_gives_the_same_person_the_same_data(browser, m
     assert a.canaries.items["payee"][0] in a.read_ledger().lower()
 
 
-def test_owner_claim_keeps_totals_and_the_balance_check_before_during_and_after(browser, mu_server):
+def test_owner_claim_keeps_totals_and_the_balance_check_before_during_and_after(browser, mu_server, monkeypatch):
     from decimal import Decimal
 
     from web_support import seed_month
@@ -145,8 +146,10 @@ def test_owner_claim_keeps_totals_and_the_balance_check_before_during_and_after(
         return {"sums": [(d, n, Decimal(s)) for d, n, s in sums], "income": month["income"], "spending": month["spending"],
                 "saved": month["saved"], "recon": recon}
 
+    monkeypatch.delenv("RECTIFI_MULTIUSER")                    # the old data was written on the laptop: plain, as it has always been
     with userctx.bound(owner_ctx):
         seed_month()                                           # old data: plain, user 1, no password yet
+    monkeypatch.setenv("RECTIFI_MULTIUSER", "1")               # now the same database is served in multi-user mode
     baseline = figures()
     assert baseline["sums"], "the owner should have data before the claim"
     assert proof.plain_sealed_cells(1) > 0

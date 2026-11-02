@@ -75,6 +75,8 @@ add("by_id", "POST", "/api/transactions", lambda i, a, b: {"amount": "11.00", "d
     note="B adds a payment to A's account")
 add("by_id", "PATCH", "/api/transactions/{txn_id}", {"note": "hijacked", "category": "Shopping"})
 add("by_id", "DELETE", "/api/transactions/{txn_id}")
+# Deterministic (no model), so friends may call it (FRIEND_ROUTES); A's id must still be refused for B and change nothing of A's.
+add("by_id", "POST", "/api/transactions/{txn_id}/apply-similar", {})
 add("self", "POST", "/api/sms/preview", {"text": SMS_B})
 add("self", "POST", "/api/sms/save", {"text": SMS_B})
 add("by_id", "GET", "/api/inbox/{item_id}/prefill")
@@ -126,7 +128,7 @@ add("self", "POST", "/api/push/test")
 # AI and library: owner only this phase (decision D7). Stand-in ids; the gate must answer 403 before any lookup.
 for _method, _path in [
     ("GET", "/api/ask/status"), ("POST", "/api/ask/threads"), ("GET", "/api/ask/threads/{thread_id}"), ("POST", "/api/ask/threads/{thread_id}/messages"),
-    ("POST", "/api/classify/jobs"), ("GET", "/api/classify/jobs/{job_id}"), ("POST", "/api/transactions/{txn_id}/apply-similar"),
+    ("POST", "/api/classify/jobs"), ("GET", "/api/classify/jobs/{job_id}"),
     ("GET", "/api/charts/status"), ("GET", "/api/charts"), ("POST", "/api/charts/draw"), ("POST", "/api/charts/threads/{thread_id}/resume"),
     ("POST", "/api/charts/threads/{thread_id}/retry"), ("GET", "/api/charts/{chart_id}"), ("DELETE", "/api/charts/{chart_id}"),
     ("POST", "/api/charts/{chart_id}/pin"), ("POST", "/api/charts/{chart_id}/rerun"),
@@ -326,12 +328,13 @@ def test_b_cannot_reach_a_through_any_route(world):
 
 def test_a_keeps_a_pending_upload_after_b_tried_its_id(world):
     a, b = world.a, world.b
+    b_rows_before = proof.count_rows(b.uid, "transactions")
     for path, body in (("/api/imports/preview", {"upload_id": a.ids["upload"], "mapping": a.ids["upload_mapping"]}),
                        ("/api/imports/commit", {"upload_id": a.ids["upload"], "account_id": b.ids["account2"], "mapping": a.ids["upload_mapping"]})):
         reply = b.post(path, body)
         assert 400 <= reply.status_code < 500 and reply.status_code not in (401, 429), f"B used A's upload id on {path}: {reply.status_code}"
         assert not leaks(body_text(reply), a, a.ids["upload"] + str(b.ids["account2"]))
-    assert proof.count_rows(b.uid, "transactions") == 1, "B's use of A's upload id imported something into B's books"
+    assert proof.count_rows(b.uid, "transactions") == b_rows_before, "B's use of A's upload id imported something into B's books"
     listed = proof.items_of(a.get("/api/transactions").json())
     assert any(str(t.get("id")) == str(a.ids["txn"]) for t in listed), "A cannot see A's own payment"
     mine = a.get(f"/api/imports/{a.ids['batch']}")
@@ -386,7 +389,7 @@ def test_a_device_token_only_ever_writes_as_its_own_person(world):
     assert proof.table_checksums(a.uid) == a_checks
     # a token that was never issued, and a revoked one, are refused with 401
     assert gw.post("/sms", headers={"Authorization": "Bearer rectifi_not_a_token"}, json={"text": SMS_B}).status_code == 401
-    device_id = proof.items_of(b.get("/api/phone/devices").json())[0]["id"]
+    device_id = next(d["id"] for d in proof.items_of(b.get("/api/phone/devices").json()) if d.get("name") == "Bob's phone")
     assert b.post(f"/api/phone/devices/{device_id}/revoke").status_code == 200
     assert gw.post("/sms", headers={"Authorization": f"Bearer {b_token}"}, json={"text": proof.sms_debit("32.32", word + "x")}).status_code == 401
 
@@ -403,7 +406,7 @@ def test_alerts_tick_never_crosses_subscriptions(quiet_world):
         with proof.raw_conn(who.uid) as conn:
             ends[who.username] = {r[0] for r in conn.execute("SELECT endpoint FROM push_subscriptions").fetchall()}
     assert ends["alice"].isdisjoint(ends["bob"])
-    alerts.tick()                                           # baseline for everybody: what is here already is history
+    proof.baseline_alerts(a.uid, b.uid)                     # what is here already is history
     rec.sent.clear()
     big = a.post("/api/transactions", {"amount": "9999.00", "direction": "debit", "date": "2026-10-21", "payee": "Chai stall", "account_id": a.ids["account"]})
     assert big.status_code in (200, 201)
@@ -429,7 +432,7 @@ def test_a_410_from_the_push_service_deletes_only_that_persons_subscription(quie
     b.post("/api/push/subscriptions", proof.push_body("Bob's phone"))
     before_b = proof.count_rows(b.uid, "push_subscriptions")
     assert proof.count_rows(a.uid, "push_subscriptions") == 1
-    alerts.tick()                                               # baseline
+    proof.baseline_alerts(a.uid, b.uid)
 
     monkeypatch.setattr(webpush, "send", lambda sub, payload, ttl=3600, urgency="normal", client=None: "gone")
     a.post("/api/transactions", {"amount": "9999.00", "direction": "debit", "date": "2026-10-21", "payee": "Chai stall", "account_id": a.ids["account"]})

@@ -263,7 +263,13 @@ def run(ctx: userctx.UserContext, *, batch: int = BATCH, max_batches: int | None
                         changed = 0
                         for row in rows:
                             new = changes(table, spec, row)
-                            if new:
+                            if new and table == "alerts" and "dedupe_key" in new and conn.execute(
+                                    "SELECT 1 FROM alerts WHERE dedupe_key = %s AND id <> %s", (new["dedupe_key"], row["id"])).fetchone():
+                                # the sign-in catch-up already wrote this alert under the hidden key: the old copy is history
+                                # that would only repeat it (and the unique key would refuse the rename)
+                                conn.execute("DELETE FROM alerts WHERE id = %s", (row["id"],))
+                                changed += 1
+                            elif new:
                                 names = list(new)
                                 conn.execute(f'UPDATE "{table}" SET ' + ", ".join(f'"{n}" = %s' for n in names) + f' WHERE "{key}" = %s',
                                              [new[n] for n in names] + [row[key]])

@@ -226,6 +226,18 @@ def test_alert_caps_and_keys_seal_custom_merchants_only(owner):
     assert any(k.startswith("streak:Swiggy:") and s == "streak:Swiggy" for k, s in keys)               # the brand stays readable
 
 
+def test_an_old_alert_whose_hidden_key_already_exists_is_dropped_not_a_crash(owner):
+    """Sign-in catch-up can write the alert under the hidden key before the sweep reaches the old plain-keyed copy."""
+    plain = "cap:merchant:Chaayos:week:2026-10-05:80"
+    with userctx.bound(owner), db.connect() as conn:
+        hidden = seal_sweep._hide_key(plain)
+        conn.execute("INSERT INTO alerts (dedupe_key, kind, severity, title, detail, push_title, push_body, numbers, scope_key) "
+                     "VALUES (%s, 'cap', 'watch', 't', 'd', 'pt', 'pb', '{}'::jsonb, 'merchant:x:week')", (hidden,))
+    assert seal_sweep.run(owner)["finished"]
+    keys = [r["dedupe_key"] for r in raw("SELECT dedupe_key FROM alerts")]
+    assert keys.count(hidden) == 1 and plain not in keys
+
+
 def test_the_old_ledger_text_copies_in_the_library_index_are_dropped(owner):
     assert raw("SELECT count(*) AS n FROM rag_chunks WHERE corpus = 'txn'")[0]["n"] == 1
     seal_sweep.run(owner)
