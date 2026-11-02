@@ -95,3 +95,37 @@ def test_weekly_review_tool_is_read_only_and_formats_numbers():
     assert review["spending"] == "₹1,250.00" and review["savings_rate"] == "75.0%"
     assert review["this_weeks_commitment"] == "Cook at home"
     assert "weekly_review" in {t.name for t in _run(_list())}
+
+
+# ── multi-user mode (plan D1): the MCP server refuses, laptop mode runs as before ──
+
+def test_main_refuses_in_multiuser_mode_without_touching_stdout(monkeypatch, capsys):
+    import rectifi.mcp_server as mcp_server
+
+    monkeypatch.setenv("RECTIFI_MULTIUSER", "1")
+    started = []
+    monkeypatch.setattr(mcp_server.server, "run", lambda *a, **k: started.append(a))
+    assert mcp_server.main() == 2
+    out = capsys.readouterr()
+    assert out.out == "" and "laptop mode" in out.err and "RECTIFI_MULTIUSER" in out.err
+    assert started == []
+
+
+def test_main_serves_over_stdio_in_laptop_mode(monkeypatch, capsys):
+    import rectifi.mcp_server as mcp_server
+
+    monkeypatch.delenv("RECTIFI_MULTIUSER", raising=False)
+    started = []
+    monkeypatch.setattr(mcp_server.server, "run", lambda *a, **k: started.append(a))
+    assert mcp_server.main() == 0
+    assert started == [("stdio",)]
+    assert capsys.readouterr().out == ""
+
+
+def test_the_module_refuses_as_a_real_process_in_multiuser_mode():
+    import subprocess
+
+    env = {**os.environ, "RECTIFI_MULTIUSER": "1"}
+    done = subprocess.run([sys.executable, "-m", "rectifi.mcp_server"], cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 2 and done.stdout == ""
+    assert "laptop mode" in done.stderr and "Traceback" not in done.stderr

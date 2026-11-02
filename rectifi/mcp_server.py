@@ -9,12 +9,14 @@ Run:  python -m rectifi.mcp_server
 from __future__ import annotations
 
 import json
+import sys
 from datetime import date
 from decimal import Decimal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
+from . import config
 from . import tools as core
 from .money import fmt_inr
 from .privacy import mask_sensitive
@@ -119,5 +121,32 @@ def reconciliation(account: str) -> str:
         return _json({"error": str(exc)})
 
 
-if __name__ == "__main__":
+MULTIUSER_REFUSAL = (
+    "The Rectifi MCP server only runs in laptop mode (one person). RECTIFI_MULTIUSER=1 is on, and this server would read "
+    "one account without anybody signing in. Turn RECTIFI_MULTIUSER off in .env to use it on your own laptop. "
+    "On a shared server, use the web app instead."
+)
+
+
+class MultiUserRefused(RuntimeError):
+    """Raised before the server starts when RECTIFI_MULTIUSER=1."""
+
+
+def refuse_if_multiuser() -> None:
+    if config.multiuser():
+        raise MultiUserRefused(MULTIUSER_REFUSAL)
+
+
+def main() -> int:
+    """Start the stdio server. stdout is the protocol, so a refusal goes to stderr (never print here) and the exit code is 2."""
+    try:
+        refuse_if_multiuser()
+    except MultiUserRefused as exc:
+        sys.stderr.write(f"Rectifi MCP server not started: {exc}\n")
+        return 2
     server.run("stdio")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

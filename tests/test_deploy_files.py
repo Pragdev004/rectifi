@@ -106,9 +106,11 @@ def test_only_the_app_publishes_a_port_and_only_on_loopback():
     for name, service in COMPOSE_DOC["services"].items():
         for port in service.get("ports", []):
             assert str(port).startswith("127.0.0.1:"), f"{name} publishes {port}"
-        if name != "app":
+        if name not in ("app", "gateway"):
             assert "ports" not in service, f"{name} must have no published ports"
     assert COMPOSE_DOC["services"]["app"]["ports"] == ["127.0.0.1:8501:8501"]
+    assert COMPOSE_DOC["services"]["gateway"]["ports"] == ["127.0.0.1:8765:8765"]
+    assert "0.0.0.0:" not in COMPOSE.read_text()      # no port is ever published on every interface
     for service in COMPOSE_DOC["services"].values():
         assert service.get("network_mode") != "host" and not service.get("privileged")
 
@@ -148,8 +150,31 @@ def test_db_and_ollama_are_configured_as_planned():
 def test_backup_keeps_seven_dumps():
     backup = COMPOSE_DOC["services"]["backup"]
     script = " ".join(backup["command"])
+    assert "pg_dump -h db -U postgres" in script and "-U rectifi" not in script      # a plain role cannot dump forced tables
+    assert backup["environment"]["PGPASSWORD"] == "${POSTGRES_PASSWORD}"
     assert "pg_dump" in script and "-Fc" in script and "tail -n +8" in script
     assert any(v.endswith(":/backups") for v in backup["volumes"])
+
+
+def test_gateway_is_opt_in_locked_down_and_runs_the_gateway_module():
+    gw = COMPOSE_DOC["services"]["gateway"]
+    assert gw["profiles"] == ["gateway"]                       # off unless asked for (rule 8)
+    assert gw["command"] == ["python", "-m", "rectifi.sms_gateway"]
+    assert gw["build"] == COMPOSE_DOC["services"]["app"]["build"]
+    assert gw["read_only"] is True and gw["cap_drop"] == ["ALL"] and "no-new-privileges:true" in gw["security_opt"]
+    assert gw["environment"]["RECTIFI_SMS_PORT"] == "8765"
+    assert gw["environment"]["RECTIFI_SMS_HOST"] == "0.0.0.0"   # inside its container only; the host side is 127.0.0.1 (test above)
+    assert "@db:5432/rectifi" in gw["environment"]["DATABASE_URL"] and gw["environment"]["DATABASE_URL"].startswith("postgresql://rectifi:")
+    assert gw["depends_on"]["db"]["condition"] == "service_healthy"
+    assert "/health" in " ".join(gw["healthcheck"]["test"])
+    assert gw["restart"] == "unless-stopped"
+
+
+def test_the_app_never_logs_in_as_the_superuser():
+    for name in ("app", "gateway"):
+        url = COMPOSE_DOC["services"][name]["environment"]["DATABASE_URL"]
+        assert url.startswith("postgresql://rectifi:${RECTIFI_DB_PASSWORD}@"), name
+    assert COMPOSE_DOC["services"]["db"]["environment"]["POSTGRES_USER"] == "postgres"
 
 
 def test_no_literal_secret_in_compose():
@@ -236,6 +261,12 @@ def test_env_deploy_example_has_no_real_values_and_covers_the_compose_variables(
     assert values["RECTIFI_DB_PASSWORD"] in ("", None)
     for name in ("RECTIFI_HOSTNAME", "POSTGRES_PASSWORD", "RECTIFI_DB_PASSWORD"):
         assert name in compose_text and name in values
+    assert values["RECTIFI_MULTIUSER"] in ("", None)           # off in the example; the guide says when to turn it on
+    plain = (ROOT / ".env.example").read_text()
+    for name in ("RECTIFI_MULTIUSER", "RECTIFI_SESSION_SECRET", "RECTIFI_SMS_PORT"):
+        assert name in plain, name
+    assert "RECTIFI_DB_PASSWORD" in plain
+    assert not [ln for ln in plain.splitlines() if ln.strip().startswith("RECTIFI_MULTIUSER=") and ln.strip() != "RECTIFI_MULTIUSER="]
 
 
 def test_hosting_guide_covers_the_steps():
@@ -331,6 +362,7 @@ def test_the_written_hash_works_through_the_real_app(tmp_path, monkeypatch):
 
 GOOD = {
     "RECTIFI_HOSTNAME": "rectifi.tail1a2b3c.ts.net", "POSTGRES_PASSWORD": "a1b2c3d4e5f6a7b8c9d0e1f2",
+    "RECTIFI_DB_PASSWORD": "f9e8d7c6b5a4f3e2d1c0b9a8",
     "RECTIFI_PASSWORD_HASH": f"'{deploy.hash_password('a long enough password')}'", "RECTIFI_SESSION_SECRET": "z" * 48,
 }
 
@@ -368,6 +400,10 @@ def test_deploy_check_passes_with_good_settings(tmp_path, capsys):
     ({"RECTIFI_PASSWORD_HASH": ""}, "RECTIFI_PASSWORD_HASH"),
     ({"RECTIFI_PASSWORD_HASH": "plaintextpassword"}, "RECTIFI_PASSWORD_HASH"),
     ({"RECTIFI_SESSION_SECRET": "tooshort"}, "RECTIFI_SESSION_SECRET"),
+    ({"RECTIFI_DB_PASSWORD": ""}, "RECTIFI_DB_PASSWORD"),
+    ({"RECTIFI_DB_PASSWORD": "short"}, "RECTIFI_DB_PASSWORD"),
+    ({"RECTIFI_DB_PASSWORD": "has/slash/and@at-signs-1234"}, "letters and numbers"),
+    ({"RECTIFI_DB_PASSWORD": GOOD["POSTGRES_PASSWORD"]}, "different from POSTGRES_PASSWORD"),
 ])
 def test_deploy_check_fails_on_each_bad_setting(tmp_path, capsys, override, needle):
     path = _env_file(tmp_path, **override)
@@ -378,6 +414,37 @@ def test_deploy_check_fails_on_each_bad_setting(tmp_path, capsys, override, need
 def test_deploy_check_fails_when_the_env_file_is_missing(tmp_path, capsys):
     assert _run_check(tmp_path / "nope") == 1
     assert "does not exist" in capsys.readouterr().out
+
+
+def test_multiuser_needs_the_session_secret_but_not_the_password_hash(tmp_path, capsys):
+    path = _env_file(tmp_path, RECTIFI_MULTIUSER="1", RECTIFI_PASSWORD_HASH="", RECTIFI_SESSION_SECRET="s" * 40)
+    assert _run_check(path) == 0
+    out = capsys.readouterr().out
+    assert "FAIL" not in out and "s" * 30 not in out
+
+
+def test_multiuser_rejects_a_short_session_secret(tmp_path, capsys):
+    path = _env_file(tmp_path, RECTIFI_MULTIUSER="1", RECTIFI_PASSWORD_HASH="", RECTIFI_SESSION_SECRET="s" * 31)
+    assert _run_check(path) == 1
+    out = capsys.readouterr().out
+    assert "RECTIFI_SESSION_SECRET" in out and "openssl rand -hex 32" in out and "s" * 31 not in out
+
+
+def test_deploy_check_never_prints_either_database_password(tmp_path, capsys):
+    path = _env_file(tmp_path, RECTIFI_DB_PASSWORD=GOOD["POSTGRES_PASSWORD"])
+    _run_check(path)
+    assert GOOD["POSTGRES_PASSWORD"] not in capsys.readouterr().out
+    path = _env_file(tmp_path)
+    _run_check(path)
+    assert GOOD["RECTIFI_DB_PASSWORD"] not in capsys.readouterr().out
+
+
+def test_deploy_check_refuses_a_compose_port_on_every_interface(tmp_path, monkeypatch, capsys):
+    (tmp_path / "deploy").mkdir()
+    (tmp_path / "deploy" / "compose.oracle.yml").write_text('services:\n  app:\n    ports:\n      - "8501:8501"\n')
+    rep = deploy.Report()
+    deploy.check_files(rep, tmp_path)
+    assert rep.failures >= 1 and "127.0.0.1 only" in capsys.readouterr().out
 
 
 def test_deploy_check_warns_about_a_readable_env_file(tmp_path, capsys):

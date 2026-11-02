@@ -39,6 +39,14 @@ LEDGER_LIMIT = 1000
 st.set_page_config(page_title="Rectifi", page_icon=":material/receipt_long:", layout="wide")
 inject_css()
 
+if config.multiuser():
+    # Several people share this database: this old app has no sign-in, so it would show one account to whoever opens it.
+    st.title("This app does not run in multi-user mode")
+    st.error("RECTIFI_MULTIUSER=1 is on. The old Streamlit app has no sign-in, so it is switched off. Use the web app "
+             "(`python scripts/dev.py up`), or turn RECTIFI_MULTIUSER off in .env to use Streamlit on your own laptop.",
+             icon=":material/lock:")
+    st.stop()
+
 
 # ───────────────────────── setup & shared helpers ─────────────────────────
 
