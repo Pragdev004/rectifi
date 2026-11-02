@@ -104,7 +104,7 @@ def test_cookie_value_finds_ours_among_others():
 def test_laptop_default_has_no_login():
     c = TestClient(create_app(), base_url="http://127.0.0.1:8501", headers=HEADERS, raise_server_exceptions=False)
     install_session_lock(c.app)
-    assert c.get("/api/auth/status").json() == {"required": False, "signed_in": True}
+    assert c.get("/api/auth/status").json() == {"required": False, "signed_in": True, "multiuser": False, "username": None, "is_owner": True}
     assert c.get("/api/meta").status_code != 401
     assert c.post("/api/auth/login", json={"password": "whatever12345"}).json()["error"]["code"] == "auth_off"
     assert c.post("/api/auth/logout-all", json={}).status_code == 400
@@ -120,7 +120,7 @@ def test_every_api_route_needs_a_session_except_health_and_auth(monkeypatch, sto
     assert c.post("/api/transactions", json={}).status_code == 401
     assert c.post("/api/auth/logout-all", json={}).status_code == 401
     assert c.get("/api/health").json() == {"ok": True}
-    assert c.get("/api/auth/status").json() == {"required": True, "signed_in": False}
+    assert c.get("/api/auth/status").json() == {"required": True, "signed_in": False, "multiuser": False, "username": None, "is_owner": True}
 
 
 def test_static_files_stay_public(monkeypatch, stored, tmp_path):
@@ -142,7 +142,7 @@ def test_login_sets_a_strict_httponly_cookie_and_unlocks_the_api(monkeypatch, st
     assert f"max-age={auth.SESSION_SECONDS}" in cookie and "secure" not in cookie
     assert PASSWORD not in r.text and PASSWORD not in r.headers["set-cookie"]
     assert c.get("/api/meta").status_code == 200
-    assert c.get("/api/auth/status").json() == {"required": True, "signed_in": True}
+    assert c.get("/api/auth/status").json() == {"required": True, "signed_in": True, "multiuser": False, "username": None, "is_owner": True}
 
 
 def test_cookie_is_secure_in_public_mode(monkeypatch, stored):

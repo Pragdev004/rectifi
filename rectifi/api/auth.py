@@ -14,6 +14,10 @@ The pieces:
   login limiter   global (every request reaches us from 127.0.0.1, so there is no IP to count): 5 failures in a minute
                   adds a 2 second pause to each try; 10 failures in 15 minutes locks sign-in for 15 minutes
 
+Multi-user mode (RECTIFI_MULTIUSER=1) is the same cookie with three more fields: uid, sid (a user_sessions row) and k (the
+secret that opens that row's wrapped data key). The checks live in rectifi/users.py; the single password is not used and the
+limiter is per account. See docs/MULTIUSER_PLAN.md section 4.
+
 Nothing here logs or prints a password, a hash or a secret.
 """
 
@@ -54,6 +58,8 @@ EPOCH_KEY = "session_epoch"
 LOCK_KEY = "login_lock"
 
 MESSAGES = {
+    "signup_off": "Sign-up isn't turned on for this Rectifi.",
+    "not_multiuser": "This Rectifi has one shared password. Change it with `python scripts/dev.py set-password` on the machine it runs on.",
     "auth_required": "Sign in to use Rectifi.",
     "invalid_password": "That password isn't right.",
     "login_locked": "Too many tries. Wait 15 minutes.",
@@ -144,14 +150,24 @@ def session_secret() -> str:
     return os.getenv("RECTIFI_SESSION_SECRET", "").strip()
 
 
+def multiuser() -> bool:
+    return config.multiuser()
+
+
 def login_required() -> bool:
-    """True when /api needs a session: a password is set, or the app is reachable beyond this laptop (public mode)."""
-    return bool(password_hash()) or config.public_mode()
+    """True when /api needs a session: a password is set, the app is reachable beyond this laptop (public mode), or it is
+    multi-user (always: there are accounts)."""
+    return bool(password_hash()) or config.public_mode() or config.multiuser()
 
 
 def startup_problem() -> str | None:
     """Why the login can't work as configured (None when it can, or when it is not needed)."""
     if not login_required():
+        return None
+    if config.multiuser():                                  # accounts replace the single password; only the cookie secret is needed
+        if len(session_secret()) < MIN_SECRET_LENGTH:
+            return (f"RECTIFI_SESSION_SECRET is missing or shorter than {MIN_SECRET_LENGTH} characters. "
+                    "Run `python scripts/dev.py set-password`; it makes a new one.")
         return None
     if parse_hash(password_hash()) is None:
         return ("Rectifi is reachable beyond this laptop (or a password is set) but RECTIFI_PASSWORD_HASH is missing or not "
@@ -241,9 +257,42 @@ def new_session_cookie() -> str:
 
 
 def session_valid(cookie_header: str | None) -> bool:
-    """Is this Cookie header a live session? Checks the signature and expiry first (no database), then the epoch."""
+    """Is this Cookie header a live session? Checks the signature and expiry first (no database), then the epoch.
+    Single-password mode only: a multi-user cookie (it has a uid) is never accepted here."""
     data = read_session(cookie_value(cookie_header), session_secret())
-    return data is not None and data["epoch"] == current_epoch()
+    return data is not None and "uid" not in data and data["epoch"] == current_epoch()
+
+
+# ───────────────────────── multi-user cookie ─────────────────────────
+
+def make_user_session(secret: str, signed_in, *, epoch: int | None = None, now: float | None = None, ttl: int = SESSION_SECONDS) -> str:
+    """Cookie for a multi-user session: the usual fields plus uid, sid and k. `signed_in` is a users.SignedIn."""
+    issued = int(_now() if now is None else now)
+    payload = {"iat": issued, "exp": issued + ttl, "epoch": int(signed_in.epoch if epoch is None else epoch),
+               "uid": int(signed_in.uid), "sid": signed_in.sid, "k": _b64e(signed_in.k)}
+    body = _b64e(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+    return f"{body}.{_sign(secret, body)}"
+
+
+def read_user_session(value: str | None, secret: str, *, now: float | None = None) -> dict | None:
+    """Like read_session, but also needs uid (int), sid and k (text). Does not look in the database."""
+    data = read_session(value, secret, now=now)
+    if data is None or type(data.get("uid")) is not int or not isinstance(data.get("sid"), str) or not isinstance(data.get("k"), str):
+        return None
+    return data
+
+
+def resolve_user(cookie_header: str | None):
+    """The users.SignedIn behind this Cookie header, or None for anything wrong: tampered, expired, deleted session, wrong
+    epoch, another person's uid. Blocking (a database read): call it from a thread."""
+    from .. import users
+    from .inputs import ensure_db
+
+    data = read_user_session(cookie_value(cookie_header), session_secret())
+    if data is None:
+        return None
+    ensure_db()
+    return users.open_session(data["uid"], data["sid"], data["k"], data["epoch"])
 
 
 # ───────────────────────── login limiter ─────────────────────────
