@@ -1,6 +1,6 @@
 # WS-AI handoff (branch ws/ai)
 
-Built from `docs/MULTIUSER_PLAN.md` section 6 (AI, owner-only: D7 and D8). Tests: `tests/test_ai_mu.py` (65 cases, 59 of them the
+Built from `docs/MULTIUSER_PLAN.md` section 6 (AI, owner-only: D7 and D8). Tests: `tests/test_ai_mu.py` (about 60 cases, most of them the
 parametrised "friend gets 403" walk over every AI route). Laptop mode behaves as before.
 
 ## What changed
