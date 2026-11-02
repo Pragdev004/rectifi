@@ -248,7 +248,7 @@ def test_a_second_init_changes_no_policy_trigger_or_constraint():
 
 def test_connect_system_is_only_called_from_the_allow_listed_modules():
     """Callers: db.py (init_db), users.py (sign-up and login, WS-AUTH), tools.py (authenticate_device, WS-CORE) and alerts.py (tick)."""
-    allowed = {"rectifi/db.py", "rectifi/users.py", "rectifi/tools.py", "rectifi/alerts.py"}
+    allowed = {"rectifi/db.py", "rectifi/users.py", "rectifi/tools.py", "rectifi/alerts.py", "rectifi/account.py"}  # account: sweep state, delete
     found = set()
     for path in (ROOT / "rectifi").rglob("*.py"):
         if re.search(r"\bconnect_system\(", path.read_text(encoding="utf-8")):
