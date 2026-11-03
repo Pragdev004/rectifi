@@ -477,6 +477,19 @@ def _open_session_row(conn, uid: int, dek: bytes, now: float) -> SignedIn:
                     ctx=_context_from(row, dek))
 
 
+def _rekey_owner_dedupe(ctx: userctx.UserContext) -> None:
+    """The owner's old rows hold plain dedupe keys; every new write holds keyed ones. Make them the same kind NOW, before the
+    claim is confirmed and before the first cookie exists, so a statement or SMS that arrives after the claim finds the payments
+    that are already here. (Until `confirmed_at` is set the phone gateway gets no ingest salt, so nothing new is written meanwhile.)
+    A failure is logged by type and left to the sweep, which does the same work (and tolerates a clash)."""
+    from . import seal_sweep                                   # inside the function: seal_sweep imports account, which imports this module
+
+    try:
+        seal_sweep.rekey_dedupe(ctx)
+    except Exception as exc:                                    # noqa: BLE001
+        log.error("owner claim: re-keying the dedupe keys stopped (%s); the sweep carries on", type(exc).__name__)
+
+
 def confirm_signup(token: str) -> SignedIn:
     """Step two. Marks the person confirmed, uses the invite, gives them their own copy of the defaults and a real session."""
     now = _now()
@@ -501,6 +514,8 @@ def confirm_signup(token: str) -> SignedIn:
         if invite is None:                                    # revoked or expired while waiting
             conn.execute("DELETE FROM user_sessions WHERE id = %s", (sid,))
             raise expired
+        if uid == OWNER_UID:                                  # before confirmed_at is set: until then the phone gateway writes nothing
+            _rekey_owner_dedupe(_context_from(_user_by_id(conn, uid), dek))
         conn.execute("UPDATE users SET confirmed_at = to_timestamp(%s), sweep_state = CASE WHEN id = %s THEN 'pending' ELSE sweep_state END "
                      "WHERE id = %s", (now, OWNER_UID, uid))
         conn.execute("UPDATE invites SET used_at = to_timestamp(%s) WHERE id = %s", (now, invite["id"]))

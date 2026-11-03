@@ -7,7 +7,7 @@ but `users.encrypted` stays false and `sweep_state` is 'pending' (rectifi/users.
   2. re-keys the dedupe columns exactly as WS-CORE writes them today, so an old statement imported again still finds its rows:
         transactions.upi_ref        blind_ingest(old reference)       (upi_ref_sealed = seal(old reference))
         transactions.fingerprint    blind(old fingerprint)
-        sms_inbox.text_hash, sms_seen.text_hash   blind_ingest(old digest)
+        sms_inbox.text_hash, sms_seen.text_hash   blind_ingest(old digest)   (sms_seen.digest_sealed = seal(old digest))
         merchant_rules / merchant_patterns .pattern_blind   blind(pattern)
         alert_rules.target_blind    blind(target), custom merchants only
   3. fills transactions.merchant_key from the allow-list where it is empty (read while the text is still readable),
@@ -18,6 +18,12 @@ but `users.encrypted` stays false and `sweep_state` is 'pending' (rectifi/users.
 Safe to stop and to run again: the work to do is "rows that still hold a plain value", so a second run finds nothing and changes
 nothing. Progress is written to users.sweep_state after each batch ('pending' -> '{"stage": ..., "done": n, "total": t}' ->
 'done'). A row is changed by one UPDATE inside its batch's transaction, so a crash never leaves half a row.
+
+A dedupe key can clash while it is re-keyed (an old plain key and a new `b1:` key for the same payment both exist, because a
+write landed between the claim and the sweep, or because the server's blind key changed). The clash never stops the work:
+see `_apply` (the older copy of a payment is kept, a newer duplicate is dropped and counted; a rule or cap you set later wins).
+`rekey_dedupe` does only the dedupe columns, fast, inside the owner's claim, so new writes find old rows at once.
+`reblind` makes the ingest hashes again after the server's RECTIFI_BLIND_KEY changed (docs/handoffs/fix-round1.md).
 
 Also here: drain_rs1(), run at every sign-in, which turns text sealed while the person was signed out (rs1.) into rx1.
 for the tables WS-CORE's sign-in hook does not cover.
@@ -31,6 +37,8 @@ import json
 import logging
 import threading
 from typing import Callable
+
+import psycopg
 
 from . import account, config, db, merchant_allowlist, sealed_fields, userctx, vault
 
@@ -96,7 +104,7 @@ def _hide_key(key: str | None) -> str | None:
         at = 1
     if at is None or parts[at] == "b1" or not _is_custom_merchant(parts[at]):
         return key
-    return ":".join(parts[:at] + [vault.blind_ingest(parts[at])] + parts[at + 1:])
+    return ":".join(parts[:at] + [vault.blind(parts[at])] + parts[at + 1:])
 
 
 def _hide_prefs(conn) -> int:
@@ -172,12 +180,67 @@ def changes(table: str, spec: sealed_fields.Table, row: dict) -> dict:
             brand = merchant_allowlist.plain_key(row["payee"], row["description"])      # read before the text is sealed
             if brand:
                 out["merchant_key"] = brand
+    if table == "sms_seen" and "text_hash" in out and row["digest_sealed"] is None:
+        out["digest_sealed"] = vault.seal(row["text_hash"])         # keep the plain digest, sealed, so the hash can be remade later
     if table == "alerts":
         for col in ("dedupe_key", "scope_key"):
             hidden = _hide_key(row[col])
             if hidden != row[col]:
                 out[col] = hidden
     return out
+
+
+# ───────────────────────── clashes while re-keying ─────────────────────────
+
+# A re-keyed row finds another row that already holds the target key. Both are the same thing (the unique index says so).
+# Money and SMS records: keep the OLD row (it carries the person's category and note) and drop the newer duplicate.
+# Rules and caps: the newer one is what the person last chose, so it wins and the old copy is dropped.
+KEEP_NEWER = ("merchant_rules", "merchant_patterns", "alert_rules")
+# Columns a clash is looked for in, and the extra columns that make the unique index (besides user_id).
+CLASH_SCOPE = {("transactions", "upi_ref"): ("direction",), ("alert_rules", "target_blind"): ("scope", "period")}
+
+
+def _others(conn, table: str, key: str, row: dict, col: str, value: str) -> list:
+    extra = CLASH_SCOPE.get((table, col), ())
+    sql = f'SELECT "{key}" AS k FROM "{table}" WHERE "{col}" = %s AND "{key}" <> %s'
+    params: list = [value, row[key]]
+    for name in extra:
+        sql += f' AND "{name}" = %s'
+        params.append(row[name])
+    return [r["k"] for r in conn.execute(sql + " FOR UPDATE", params).fetchall()]
+
+
+def _drop_duplicate(conn, table: str, key: str, kept: dict, dropped_key) -> None:
+    """Delete the duplicate row, first handing its category choice to the kept row when the person made one only there."""
+    if table == "transactions":
+        other = conn.execute("SELECT category_id, category_source, category_confidence FROM transactions WHERE id = %s", (dropped_key,)).fetchone()
+        if other and other["category_source"] == "user" and kept["category_source"] != "user":
+            conn.execute("UPDATE transactions SET category_id = %s, category_source = 'user', category_confidence = %s WHERE id = %s",
+                         (other["category_id"], other["category_confidence"], kept[key]))
+    conn.execute(f'DELETE FROM "{table}" WHERE "{key}" = %s', (dropped_key,))
+
+
+def _apply(conn, table: str, key: str, row: dict, new: dict, spec: sealed_fields.Table) -> tuple[int, int]:
+    """Write `new` to one row. Returns (rows changed, duplicates dropped). Never raises on a dedupe clash."""
+    merged = 0
+    for attempt in (1, 2):
+        for col in (c for c in spec.blind if c in new):
+            for other in _others(conn, table, key, row, col, new[col]):
+                if table in KEEP_NEWER:                          # the already-keyed row is the newer choice: the old row goes
+                    conn.execute(f'DELETE FROM "{table}" WHERE "{key}" = %s', (row[key],))
+                    return 1, 1
+                _drop_duplicate(conn, table, key, row, other)
+                merged += 1
+        names = list(new)
+        try:
+            with conn.transaction():                              # a savepoint: a clash here undoes only this row's update
+                conn.execute(f'UPDATE "{table}" SET ' + ", ".join(f'"{n}" = %s' for n in names) + f' WHERE "{key}" = %s',
+                             [new[n] for n in names] + [row[key]])
+            return 1, merged
+        except psycopg.errors.UniqueViolation:                   # a write landed after the look: look again, once
+            if attempt == 2:
+                raise
+    return 0, merged                                             # unreachable
 
 
 # ───────────────────────── running ─────────────────────────
@@ -190,8 +253,10 @@ def _specs() -> dict[str, sealed_fields.Table]:
     return dict(sealed_fields.SEALED)
 
 
-def _fetch(conn, table: str, spec: sealed_fields.Table, size: int, after: int | None) -> list[dict]:
+def _fetch(conn, table: str, spec: sealed_fields.Table, size: int, after: int | None, only_dedupe: bool = False) -> list[dict]:
     flags, where = _todo_sql(table, spec)
+    if only_dedupe:
+        where = _dedupe_where(table, spec)
     key = KEY.get(table, "id")
     sql = f'SELECT *, {flags} FROM "{table}" WHERE {where}'
     params: list = []
@@ -200,6 +265,70 @@ def _fetch(conn, table: str, spec: sealed_fields.Table, size: int, after: int | 
         params.append(after)
     sql += f' ORDER BY "{key}" LIMIT {int(size)} FOR UPDATE SKIP LOCKED'
     return conn.execute(sql, params or None).fetchall()
+
+
+def _write_row(conn, table: str, spec: sealed_fields.Table, key: str, row: dict, new: dict) -> tuple[int, int]:
+    """Apply one row's changes. (rows changed, duplicates dropped)."""
+    if table == "alerts" and "dedupe_key" in new and conn.execute(
+            "SELECT 1 FROM alerts WHERE dedupe_key = %s AND id <> %s", (new["dedupe_key"], row["id"])).fetchone():
+        # the sign-in catch-up already wrote this alert under the hidden key: the old copy is history that would only repeat it
+        # (and the unique key would refuse the rename)
+        conn.execute("DELETE FROM alerts WHERE id = %s", (row["id"],))
+        return 1, 0
+    return _apply(conn, table, key, row, new, spec)
+
+
+def _dedupe_where(table: str, spec: sealed_fields.Table) -> str:
+    """Rows whose dedupe keys are still plain (or, for alerts, name a custom merchant): what the claim re-keys at once."""
+    tests = [_plain_blind(c) for c in spec.blind]
+    if table == "transactions":
+        tests.append("(upi_ref_sealed IS NULL AND upi_ref IS NOT NULL AND upi_ref <> '' AND upi_ref NOT LIKE 'b1:%%')")
+    if table == "alerts":
+        tests.append("(dedupe_key ~ '^(cap:merchant|streak):' OR scope_key ~ '^(streak|merchant):')")
+    where = "(" + " OR ".join(tests) + ")"
+    if spec.when:
+        where += f" AND \"{spec.when[0]}\" = '{spec.when[1]}'"
+    return where
+
+
+DEDUPE_SEALED = ("upi_ref_sealed", "digest_sealed")          # the plain value behind a hash, kept sealed so the hash can be remade
+
+
+def rekey_dedupe(ctx: userctx.UserContext, *, batch: int = 500) -> dict:
+    """Make every dedupe key of this person's old rows a keyed hash NOW (HMACs and small seals only, no text work), so a payment
+    written before the owner's claim is found by a statement or SMS that arrives after it. Run inside the owner's claim, before
+    the first cookie is issued; the slow sealing of text stays with `run`. Safe to run again. A clash drops a duplicate (see `_apply`).
+    Returns {"rekeyed": n, "merged": n}."""
+    if not config.multiuser() or ctx.key is None:
+        return {"rekeyed": 0, "merged": 0}
+    done = merged = 0
+    with userctx.bound(ctx):
+        for table, spec in _specs().items():
+            if not spec.blind and table != "alerts":
+                continue
+            allowed = set(spec.blind) | set(DEDUPE_SEALED) | ({"dedupe_key", "scope_key"} if table == "alerts" else set())
+            key, after = KEY.get(table, "id"), None
+            while True:
+                with db.connect() as conn:
+                    rows = _fetch(conn, table, spec, batch, after, only_dedupe=True)
+                    changed = 0
+                    for row in rows:
+                        new = {k: v for k, v in changes(table, spec, row).items() if k in allowed}
+                        if new:
+                            did, dropped = _write_row(conn, table, spec, key, row, new)
+                            changed, merged = changed + did, merged + dropped
+                done += changed
+                if not rows:
+                    break
+                if key == "id":
+                    after = rows[-1]["id"]
+                elif not changed:
+                    break
+        with db.connect() as conn:
+            done += _hide_prefs(conn)
+    if merged:
+        log.warning("re-keying dedupe keys merged %s duplicate rows", merged)
+    return {"rekeyed": done, "merged": merged}
 
 
 def remaining() -> int:
@@ -258,7 +387,8 @@ def status(uid: int = OWNER_UID) -> dict:
 
 def run(ctx: userctx.UserContext, *, batch: int = BATCH, max_batches: int | None = None,
         on_batch: Callable[[str, int], None] | None = None) -> dict:
-    """Seal everything plain for ctx's person. Returns {"finished", "sealed", "busy", "skipped"?}.
+    """Seal everything plain for ctx's person. Returns {"finished", "sealed", "busy", "merged", "skipped"?}.
+    `merged` counts duplicate rows dropped because a dedupe key clashed (see `_apply`); it is also logged.
     `max_batches` stops early (the next call carries on); `on_batch(table, changed)` is a hook for tests."""
     if not config.multiuser():
         return {"finished": False, "sealed": 0, "busy": False, "skipped": "laptop mode stores plain text on purpose"}
@@ -269,7 +399,7 @@ def run(ctx: userctx.UserContext, *, batch: int = BATCH, max_batches: int | None
         return {"finished": False, "sealed": 0, "busy": True}
     try:
         specs = _specs()
-        done = batches = 0
+        done = batches = merged = 0
         with userctx.bound(ctx):
             total = sum(_count_todo(t, s) for t, s in specs.items())
             with db.connect() as conn:                         # decision D8: no copies of ledger text in the library index
@@ -282,17 +412,10 @@ def run(ctx: userctx.UserContext, *, batch: int = BATCH, max_batches: int | None
                         changed = 0
                         for row in rows:
                             new = changes(table, spec, row)
-                            if new and table == "alerts" and "dedupe_key" in new and conn.execute(
-                                    "SELECT 1 FROM alerts WHERE dedupe_key = %s AND id <> %s", (new["dedupe_key"], row["id"])).fetchone():
-                                # the sign-in catch-up already wrote this alert under the hidden key: the old copy is history
-                                # that would only repeat it (and the unique key would refuse the rename)
-                                conn.execute("DELETE FROM alerts WHERE id = %s", (row["id"],))
-                                changed += 1
-                            elif new:
-                                names = list(new)
-                                conn.execute(f'UPDATE "{table}" SET ' + ", ".join(f'"{n}" = %s' for n in names) + f' WHERE "{key}" = %s',
-                                             [new[n] for n in names] + [row[key]])
-                                changed += 1
+                            if new:
+                                did, dropped = _write_row(conn, table, spec, key, row, new)
+                                changed += did
+                                merged += dropped
                     if not rows:
                         break
                     if key == "id":
@@ -305,15 +428,15 @@ def run(ctx: userctx.UserContext, *, batch: int = BATCH, max_batches: int | None
                     if on_batch:
                         on_batch(table, changed)
                     if max_batches is not None and batches >= max_batches:
-                        return {"finished": False, "sealed": done, "busy": False}
+                        return {"finished": False, "sealed": done, "busy": False, "merged": merged}
             with db.connect() as conn:
                 done += _hide_prefs(conn)
             if remaining() != 0:                               # never switch the database guard on over plain text
                 log.warning("sweep: some rows still hold plain text; encryption is not switched on yet")
-                return {"finished": False, "sealed": done, "busy": False}
+                return {"finished": False, "sealed": done, "busy": False, "merged": merged}
             account.finish_sweep(ctx.uid)
-        log.info("sweep finished: %s rows sealed", done)
-        return {"finished": True, "sealed": done, "busy": False}
+        log.info("sweep finished: %s rows sealed, %s duplicate rows merged", done, merged)
+        return {"finished": True, "sealed": done, "busy": False, "merged": merged}
     finally:
         lock.release()
 

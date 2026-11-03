@@ -34,10 +34,12 @@ CREATE TABLE IF NOT EXISTS users (
     encrypted           BOOLEAN NOT NULL DEFAULT false,
     confirmed_at        TIMESTAMPTZ,
     sweep_state         TEXT,
+    blind_fp            TEXT,           -- fingerprint (never the key) of the server blind key that made this person's ingest hashes
     failures            JSONB NOT NULL DEFAULT '[]'::jsonb,
     locked_until        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS blind_fp TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_username ON users (lower(username));
 
 CREATE TABLE IF NOT EXISTS invites (
@@ -159,6 +161,8 @@ CREATE TABLE IF NOT EXISTS sms_seen (
     text_hash  TEXT PRIMARY KEY,
     seen_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The plain digest, sealed: lets the keyed hash above be made again if the server's blind key ever changes (docs/handoffs/fix-round1.md).
+ALTER TABLE sms_seen ADD COLUMN IF NOT EXISTS digest_sealed TEXT;
 
 -- One row per statement import, so "Undo this import" can remove exactly the rows that import added.
 -- snapshot_changes remembers what the import did to the balance snapshots (so undo can put them back).

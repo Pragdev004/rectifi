@@ -34,7 +34,8 @@ SEALED: dict[str, Table] = {
     "weekly_reviews": Table(sealed=("commitment",)),
     "phone_devices": Table(sealed=("name",)),
     "sms_inbox": Table(sealed=("sender", "raw_text", "reason"), blind=("text_hash",)),
-    "sms_seen": Table(blind=("text_hash",)),
+    # digest_sealed: the plain digest behind text_hash, sealed, so the keyed hash can be made again if the server's blind key changes
+    "sms_seen": Table(sealed=("digest_sealed",), blind=("text_hash",)),
     "import_batches": Table(sealed=("filename",)),
     "merchant_patterns": Table(sealed=("pattern", "merchant"), blind=("pattern_blind",)),
     # a cap on an allow-listed brand or a category stays plain; only a custom merchant is sealed, which depends on the target

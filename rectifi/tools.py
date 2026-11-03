@@ -1021,18 +1021,16 @@ def authenticate_device(token: str | None) -> dict | None:
                 match = row
         if match is None or match["revoked_at"] is not None:
             return None
-        person = conn.execute("SELECT public_key, ingest_salt FROM users WHERE id = %s", (match["user_id"],)).fetchone() or {}
+        person = conn.execute("SELECT public_key, ingest_salt, confirmed_at IS NOT NULL AS confirmed FROM users WHERE id = %s",
+                              (match["user_id"],)).fetchone() or {}
+    if not person.get("confirmed"):             # an owner claim that is not confirmed yet: no keys, so nothing is written until its
+        person = {}                             # old rows have been re-keyed (users.confirm_signup); the phone retries
     ctx = userctx.UserContext(uid=match["user_id"], key=None, public_key=bytes(person["public_key"]) if person.get("public_key") else None,
                               ingest_salt=bytes(person["ingest_salt"]) if person.get("ingest_salt") else None, strict=False)
     with userctx.bound(ctx), connect() as conn:
         conn.execute("UPDATE phone_devices SET last_seen_at = now() WHERE id = %s", (match["id"],))
     name = match["name"] if not vault.is_envelope(match["name"]) else None        # a sealed name stays sealed: the gateway never needs it
     return {"id": match["id"], "name": name, "uid": match["user_id"], "ctx": ctx}
-
-
-def _sms_key(sender: str | None, text: str, sent_at: datetime | None) -> str:
-    """The stored identity of one SMS: the digest, keyed per person (works signed out). Laptop mode: the digest itself."""
-    return vault.blind_ingest(_sms_digest(sender, text, sent_at))
 
 
 def _sms_digest(sender: str | None, text: str, sent_at: datetime | None) -> str:
@@ -1111,7 +1109,8 @@ def ingest_sms(device_id: int | None, sender: str | None, text: str, sent_at: da
         with connect() as conn:                 # the device must be this person's (row level security hides anyone else's)
             if conn.execute("SELECT 1 FROM phone_devices WHERE id = %s", (device_id,)).fetchone() is None:
                 raise RectifiError("That phone is not paired to this account.")
-    digest = _sms_key(sender, text, sent_at)
+    plain_digest = _sms_digest(sender, text, sent_at)
+    digest = vault.blind_ingest(plain_digest)
     if verdict.kind == "review":
         return _to_inbox(device_id, sender, text, sent_at, digest, verdict.reason)
     parsed = verdict.parsed
@@ -1120,7 +1119,8 @@ def ingest_sms(device_id: int | None, sender: str | None, text: str, sent_at: da
         account_id = _sms_account(parsed)
         with connect() as conn:
             fresh = conn.execute(
-                "INSERT INTO sms_seen (text_hash) VALUES (%s) ON CONFLICT DO NOTHING RETURNING text_hash", (digest,)
+                "INSERT INTO sms_seen (text_hash, digest_sealed) VALUES (%s, %s) ON CONFLICT DO NOTHING RETURNING text_hash",
+                (digest, vault.seal(plain_digest))
             ).fetchone()
             if fresh is None:
                 return {"status": "duplicate"}
