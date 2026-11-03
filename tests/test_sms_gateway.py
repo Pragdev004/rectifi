@@ -434,3 +434,12 @@ def test_the_start_up_line_is_honest_on_the_server_and_on_an_open_laptop(monkeyp
         assert words in caplog.text, (host, public, caplog.text)
         if public:
             assert "anyone on your network" not in caplog.text
+
+
+def test_a_flood_of_wrong_tokens_never_refuses_a_phone_with_a_good_token(client, device):
+    """Review round 1: every request arrives from one address (Funnel, Docker), so wrong tokens must not lock out valid ones."""
+    for _ in range(sms_gateway.FAILED_AUTH_LIMIT + 5):
+        post(client, "nope", sms(BANK_SMS))
+    assert post(client, "nope", sms(BANK_SMS)).status_code == 429                      # wrong tokens are throttled
+    good = post(client, device["token"], sms(BANK_SMS, stamp=1792573200000))
+    assert good.status_code == 200 and good.json() == {"status": "added"}              # the real phone is not

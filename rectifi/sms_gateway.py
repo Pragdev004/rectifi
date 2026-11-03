@@ -47,7 +47,7 @@ log = logging.getLogger("rectifi.sms_gateway")
 MAX_BODY = 8 * 1024
 RATE_LIMIT = 60                   # SMS per device per minute
 RATE_WINDOW = 60.0
-FAILED_AUTH_LIMIT = 30            # wrong tokens per client address per minute
+FAILED_AUTH_LIMIT = 30            # wrong tokens per client address per minute; throttles the answer to a wrong token only, never a good one
 DB_ERRORS = (DatabaseUnavailable, psycopg.OperationalError, PoolTimeout)
 
 TEXT_KEYS = ("text", "message", "body")
@@ -182,14 +182,16 @@ def create_app() -> Starlette:
 
     async def sms(request: Request) -> JSONResponse:
         client = request.client.host if request.client else "?"
-        if failures.full(client):
-            return _reply(429, {"error": "too many wrong tokens, wait a minute"}, {"Retry-After": "60"})
         token = bearer_token(request)
         try:
             device = await run_in_threadpool(tools.authenticate_device, token) if token else None
         except DB_ERRORS:
             return _reply(503, {"error": "database not reachable"}, {"Retry-After": "30"})
         if device is None:
+            # Only a WRONG token is ever throttled, and never before the token is checked: behind Funnel or the Docker port every
+            # request comes from the same address, so a stranger's bad tokens must not be able to refuse a phone that has a good one.
+            if failures.full(client):
+                return _reply(429, {"error": "too many wrong tokens, wait a minute"}, {"Retry-After": "60"})
             failures.add(client)
             return _reply(401, {"error": "unauthorized"}, {"WWW-Authenticate": "Bearer"})
         if not device_limit.allow(device["id"]):
