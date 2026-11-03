@@ -341,23 +341,42 @@ def username_problem(username) -> str | None:
 
 # ───────────────────────── clearing unconfirmed sign-ups ─────────────────────────
 
+RESERVED_NAMES = ("owner",)             # row 1's placeholder name: no friend may take it, so resetting row 1 can never clash
+
+
+def _reset_owner_claim(conn) -> None:
+    """Row 1 back to 'no password yet' after an owner claim nobody confirmed. The name goes back to 'owner'; if somebody already
+    holds that name (a database from before the name was reserved) row 1 gets a unique placeholder instead of an error."""
+    sets = ("scrypt_salt = NULL, verifier = NULL, dek_by_password = NULL, dek_by_recovery = NULL, recovery_salt = NULL, "
+            "public_key = NULL, private_key_wrapped = NULL, ingest_salt = NULL, confirmed_at = NULL, sweep_state = NULL, blind_fp = NULL")
+    for name in ("owner", f"owner-{secrets.token_hex(4)}"):
+        try:
+            with conn.transaction():                          # a savepoint: a clash undoes only this try
+                conn.execute(f"UPDATE users SET username = %s, {sets} WHERE id = %s AND confirmed_at IS NULL", (name, OWNER_UID))
+            return
+        except psycopg.errors.UniqueViolation:
+            continue
+
+
 def purge_unconfirmed(now: float | None = None) -> int:
     """Drop sign-ups nobody confirmed in time (and expired sessions). The username and the invite become free again.
-    The owner's row is never deleted: an unconfirmed owner claim is rolled back to 'no password yet'."""
+    The owner's row is never deleted: an unconfirmed owner claim is rolled back to 'no password yet'.
+    One bad row never stops this: it runs at the start of sign-up, confirm and sign-in, so a raise here would lock everybody out."""
     now = _now() if now is None else now
+    removed = 0
     with db.connect_system("users: clear unconfirmed sign-ups") as conn:
         stale = conn.execute("SELECT id, user_id FROM user_sessions WHERE pending AND expires_at <= to_timestamp(%s)", (now,)).fetchall()
-        removed = 0
         for s in stale:
-            if s["user_id"] == OWNER_UID:
-                conn.execute("UPDATE users SET username = 'owner', scrypt_salt = NULL, verifier = NULL, dek_by_password = NULL, "
-                             "dek_by_recovery = NULL, recovery_salt = NULL, public_key = NULL, private_key_wrapped = NULL, "
-                             "ingest_salt = NULL, confirmed_at = NULL, sweep_state = NULL WHERE id = %s AND confirmed_at IS NULL",
-                             (OWNER_UID,))
-                conn.execute("UPDATE invites SET reserved_by = NULL WHERE reserved_by = %s AND used_at IS NULL", (OWNER_UID,))
-            else:
-                conn.execute("DELETE FROM users WHERE id = %s AND confirmed_at IS NULL", (s["user_id"],))
-            removed += 1
+            try:
+                with conn.transaction():
+                    if s["user_id"] == OWNER_UID:
+                        _reset_owner_claim(conn)
+                        conn.execute("UPDATE invites SET reserved_by = NULL WHERE reserved_by = %s AND used_at IS NULL", (OWNER_UID,))
+                    else:
+                        conn.execute("DELETE FROM users WHERE id = %s AND confirmed_at IS NULL", (s["user_id"],))
+                removed += 1
+            except psycopg.Error as exc:
+                log.error("could not clear one unconfirmed sign-up (%s); skipped", type(exc).__name__)
         conn.execute("DELETE FROM user_sessions WHERE expires_at <= to_timestamp(%s)", (now,))
         removed += conn.execute(
             "DELETE FROM users u WHERE u.confirmed_at IS NULL AND u.id <> %s AND u.created_at < to_timestamp(%s) "
@@ -425,6 +444,8 @@ def signup(invite_code: str, username: str, password: str) -> tuple[str, str]:
                 if reserved is None or claimed is None:
                     raise AuthError(400, "invalid_invite", MESSAGES["invalid_invite"], "invite")
             else:
+                if username.lower() in RESERVED_NAMES:
+                    raise AuthError(409, "username_taken", MESSAGES["username_taken"], "username")
                 row = conn.execute(
                     "INSERT INTO users (username, scrypt_salt, verifier, dek_by_password, dek_by_recovery, recovery_salt, public_key, "
                     "private_key_wrapped, ingest_salt, encrypted) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true) RETURNING id",

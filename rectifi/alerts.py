@@ -276,8 +276,10 @@ def _is_plain(scope: str, target: str) -> bool:
 
 def _name_part(scope: str, target: str) -> str:
     """The merchant's place in a dedupe key or scope key: the plain name for an allow-listed brand, a keyed hash for a custom
-    merchant (works signed out too). Laptop mode returns the name unchanged."""
-    return target if _is_plain(scope, target) else (vault.blind_ingest(target) or target)
+    merchant. The hash is keyed from the person's data key (`vault.blind`), which no dump or backup holds, so the name cannot be
+    guessed offline; it needs a signed-in person, which a custom merchant needs anyway (its name is sealed, so the signed-out
+    sweep never sees it and the cap fires at the next sign-in). Laptop mode returns the name unchanged."""
+    return target if _is_plain(scope, target) else (vault.blind(target) or target)
 
 
 def _rule_cap(cap) -> Decimal:

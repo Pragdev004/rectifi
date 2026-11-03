@@ -367,5 +367,5 @@ def test_old_push_labels_and_taught_merchant_names_are_sealed_and_their_dedupe_h
             assert conn.execute("SELECT label FROM push_subscriptions").fetchone()["label"] == "Prag phone"
             titles = {r["title"] for r in conn.execute("SELECT title FROM alerts").fetchall()}
         custom_key = [r["dedupe_key"] for r in raw("SELECT dedupe_key FROM alerts")]
-        assert f"streak:{vault.blind_ingest('Chaayos')}:2026-10-05:5" in custom_key       # exactly blind_ingest(name), as WS-ALERTS writes it
+        assert f"streak:{vault.blind('Chaayos')}:2026-10-05:5" in custom_key       # exactly blind(name) (data key, no server key), as WS-ALERTS writes it
     assert titles == {"T", "Chaayos again"}
