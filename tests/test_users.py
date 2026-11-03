@@ -256,15 +256,15 @@ def test_only_known_functions_write_the_wrapped_keys_and_each_one_needs_a_secret
     """Every place in users.py that writes dek_by_password is sign-up, change_password or recover. The last two first prove
     the current password (_verify_current) or the recovery code (recovery_key + unwrap_key)."""
     writers = {name for name, fn in inspect.getmembers(users, inspect.isfunction) if "dek_by_password =" in inspect.getsource(fn)}
-    assert writers == {"change_password", "recover", "signup", "purge_unconfirmed"}
-    assert "dek_by_password = NULL" in inspect.getsource(users.purge_unconfirmed)                   # that one only clears an unconfirmed owner claim
+    assert writers == {"change_password", "recover", "signup", "_reset_owner_claim"}
+    assert "dek_by_password = NULL" in inspect.getsource(users._reset_owner_claim)                   # that one only clears an unconfirmed owner claim
     assert "_verify_current(" in inspect.getsource(users.change_password)
     recover_source = inspect.getsource(users.recover)
     assert "unwrap_key(vault.recovery_key(" in recover_source and recover_source.index("unwrap_key(") < recover_source.index("UPDATE users")
     claims = inspect.getsource(users.signup)
     assert "dek_by_password = %s" in claims and "WHERE id = %s AND verifier IS NULL" in claims          # the owner claim only works on an unclaimed row
     others = [n for n, fn in inspect.getmembers(users, inspect.isfunction) if "dek_by_password" in inspect.getsource(fn)]
-    assert set(others) <= {"change_password", "recover", "signup", "purge_unconfirmed", "_check_password", "_can_sign_in", "_signed_in_user", "_open_session_row"}
+    assert set(others) <= {"change_password", "recover", "signup", "purge_unconfirmed", "_reset_owner_claim", "_check_password", "_can_sign_in", "_signed_in_user", "_open_session_row"}
 
 
 def test_the_password_routes_refuse_without_the_secret(monkeypatch):

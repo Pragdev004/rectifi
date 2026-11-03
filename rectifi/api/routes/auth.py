@@ -32,6 +32,26 @@ def _set_cookie(response: Response, value: str) -> None:
                         secure=auth.cookie_secure())
 
 
+def _device(request) -> tuple[int, str] | None:
+    """The known-device id the browser presents (checked against the server secret), or None."""
+    try:
+        return auth.read_device_cookie(auth.cookie_value(request.headers.get("cookie"), auth.DEVICE_COOKIE), auth.session_secret())
+    except Exception:                                           # noqa: BLE001  (no secret configured: no known device)
+        return None
+
+
+def _client(request) -> str:
+    return request.client.host if request.client else ""
+
+
+def _remember_device(response: Response, request, uid: int) -> None:
+    """Keep (or start) this browser's known-device id for this account. Not a credential: see api/auth.py."""
+    held = _device(request)
+    value, _ = auth.make_device_cookie(auth.session_secret(), uid, held[1] if held and held[0] == uid else None)
+    response.set_cookie(auth.DEVICE_COOKIE, value, max_age=auth.DEVICE_SECONDS, path="/", httponly=True, samesite="strict",
+                        secure=auth.cookie_secure())
+
+
 def _clear_cookie(response: Response) -> None:
     response.delete_cookie(auth.COOKIE_NAME, path="/", httponly=True, samesite="strict", secure=auth.cookie_secure())
 
@@ -123,6 +143,7 @@ async def signup_confirm(request):
         return _refusal(result)
     response = _ok({"ok": True, "username": result.username, "is_owner": result.is_owner})
     _set_cookie(response, _session_cookie(result))
+    _remember_device(response, request, result.uid)
     await run_in_threadpool(_run_sign_in_hooks, result)
     return response
 
@@ -136,7 +157,7 @@ async def login(request):
     if not isinstance(password, str) or not password:
         raise ApiError(422, "invalid", "Type your password.", "password")
     if config.multiuser():
-        return await _login_multiuser(data, password)
+        return await _login_multiuser(request, data, password)
     outcome = await run_in_threadpool(auth.limiter.attempt, password, auth.password_hash())
     if outcome.delay:
         await auth.pause(outcome.delay)
@@ -150,11 +171,13 @@ async def login(request):
     return response
 
 
-async def _login_multiuser(data: dict, password: str) -> Response:
+async def _login_multiuser(request, data: dict, password: str) -> Response:
     username = data.get("username")
     if not isinstance(username, str) or not username.strip():
         raise ApiError(422, "invalid", "Type your username.", "username")
-    outcome = await _call(users.login, username[:100], password)
+    outcome = await _call(users.login, username[:100], password, _client(request), _device(request))
+    if isinstance(outcome, users.AuthError):                       # busy: too many sign-ins at once, or a flood of misses
+        return _refusal(outcome)
     if outcome.delay:
         await auth.pause(outcome.delay)
     if outcome.status == "locked":
@@ -164,6 +187,7 @@ async def _login_multiuser(data: dict, password: str) -> Response:
     who = outcome.signed_in
     response = _ok({"ok": True, "username": who.username, "is_owner": who.is_owner})
     _set_cookie(response, _session_cookie(who))
+    _remember_device(response, request, who.uid)
     await run_in_threadpool(_run_sign_in_hooks, who)
     return response
 
@@ -216,7 +240,7 @@ async def recover(request):
     data = await read_json(request)
     _require_multiuser()
     result = await _call(users.recover, _text(data, "username", max_len=100), _text(data, "recovery_code", max_len=100),
-                         _text(data, "new_password"))
+                         _text(data, "new_password"), _client(request), _device(request))
     if isinstance(result, users.AuthError):
         return _refusal(result)
     response = _ok({"recovery_code": result})                    # the NEW code; the old one no longer works; everyone is signed out

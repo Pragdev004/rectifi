@@ -471,13 +471,15 @@ def test_recovery_code_is_accepted_however_it_is_typed():
     assert r.status_code == 200
 
 
-def test_a_wrong_recovery_code_counts_against_that_account_only():
+def test_a_wrong_recovery_code_has_its_own_limit_and_blocks_neither_sign_in_nor_other_accounts():
     confirmed_client("alice")
     confirmed_client("bobby")
     probe = new_client()
     for _ in range(users.LOCK_AFTER):
         probe.post("/api/auth/recover", json={"username": "alice", "recovery_code": "AAAAA-AAAAA-AAAAA-AAAAA-AAAAA", "new_password": NEW_PASSWORD})
-    assert probe.post("/api/auth/login", json={"username": "alice", "password": PASSWORD}).status_code == 429
+    again = probe.post("/api/auth/recover", json={"username": "alice", "recovery_code": "AAAAA-AAAAA-AAAAA-AAAAA-AAAAA", "new_password": NEW_PASSWORD})
+    assert again.status_code == 429                                                  # recovery is limited for this client...
+    assert probe.post("/api/auth/login", json={"username": "alice", "password": PASSWORD}).status_code == 200     # ...sign-in is not
     assert probe.post("/api/auth/login", json={"username": "bobby", "password": PASSWORD}).status_code == 200
 
 

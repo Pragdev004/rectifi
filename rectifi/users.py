@@ -50,16 +50,27 @@ PENDING_SECONDS = 30 * 60               # an unconfirmed sign-up is thrown away 
 SESSION_SECONDS = 7 * 24 * 3600
 TOUCH_SECONDS = 5 * 60                  # last_seen_at is written at most this often
 
-# Per-account limiter (tunables). One person's lockout never touches another account.
-DELAY_AFTER = 5                         # failures within DELAY_WINDOW that start a pause
+# Sign-in limiter (tunables). Design (docs/handoffs/fix-round1.md): a stranger who knows a username must not be able to keep that
+# person out. So there is NO lock on the account. What exists instead:
+#   * per (account, client) pair: a pause after DELAY_AFTER misses, and a block of that pair only after LOCK_AFTER misses.
+#     "Client" is the browser's known-device id (a signed cookie from an earlier good sign-in) or else its network address.
+#   * per account, across all clients: a response delay that grows with the misses (never a refusal, and a known device skips it).
+#   * recovery counts in its own bucket, so password misses never block it (and the other way round).
+#   * globally: a cap on password hashing in flight (AUTH_INFLIGHT; the rest get 429 at once) and a budget of misses per minute.
+DELAY_AFTER = 5                         # misses within DELAY_WINDOW by one client that start a pause
 DELAY_WINDOW = 60
 DELAY_SECONDS = 2.0
-LOCK_AFTER = 10                         # failures within LOCK_WINDOW lock the account
+LOCK_AFTER = 10                         # misses within LOCK_WINDOW that block that one (account, client) pair
 LOCK_WINDOW = 15 * 60
 LOCK_SECONDS = 15 * 60
+ACCOUNT_FREE_MISSES = 10                # misses on one account (all clients, LOCK_WINDOW) before the account-wide delay starts
+ACCOUNT_MAX_DELAY = 30.0                # that delay doubles per miss up to this many seconds
+GLOBAL_MISS_LIMIT = 120                 # misses from anyone per GLOBAL_MISS_WINDOW; beyond it only known devices may try
+GLOBAL_MISS_WINDOW = 60
+AUTH_INFLIGHT = 4                       # password hashes running or waiting at once (vault runs 2); more are refused with 429 at once
 SIGNUP_LIMIT = 10                       # sign-up attempts, from anyone, per SIGNUP_WINDOW (global: every request is from 127.0.0.1)
 SIGNUP_WINDOW = 3600
-GHOST_LIMIT = 10_000                    # unknown usernames remembered by the limiter, so memory stays bounded
+THROTTLE_LIMIT = 10_000                 # (account, client) pairs remembered by the limiter, so memory stays bounded
 
 MESSAGES = {
     "invalid_invite": "That invite code isn't valid.",
@@ -67,6 +78,7 @@ MESSAGES = {
     "invalid_password": "That password isn't right.",
     "invalid_recovery": "That username or recovery code isn't right.",
     "login_locked": "Too many tries. Wait 15 minutes.",
+    "login_busy": "Rectifi is busy signing people in. Wait a moment and try again.",
     "signup_limited": "Too many sign-up tries. Wait an hour.",
     "username_taken": "That username is taken.",
     "signup_expired": "This sign-up has expired or isn't valid. Start again with your invite code.",
@@ -197,52 +209,81 @@ class _Window:
             return True
 
 
+    def count(self, window: int, now: float) -> int:
+        with self._lock:
+            self._times = [t for t in self._times if now - t < window]
+            return len(self._times)
+
+    def add(self, now: float, keep: int = 100_000) -> None:
+        with self._lock:
+            self._times.append(now)
+            del self._times[:-keep]
+
+
 signup_window = _Window()
+miss_window = _Window()                 # every sign-in miss from anyone (the global budget)
 
 
-class _Ghosts:
-    """Failure counts for usernames that don't exist (or can't sign in yet), so they behave exactly like real accounts:
-    the same pause, the same lock, the same message. Kept in memory and bounded."""
+class _Throttle:
+    """Misses per (account name, client) pair and per account name, in memory and bounded. Unknown names are counted like real ones,
+    so a stranger learns nothing from the limiter. Nothing here ever locks an account: only one pair can be blocked."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._state: dict[str, tuple[list[float], float]] = {}
+        self._pairs: dict[tuple, tuple[list[float], float]] = {}      # pair -> (miss times, blocked until)
+        self._names: dict[str, list[float]] = {}                      # name -> miss times, all clients
 
     def reset(self) -> None:
         with self._lock:
-            self._state = {}
+            self._pairs, self._names = {}, {}
 
-    def locked_for(self, name: str, now: float) -> int:
+    def blocked_for(self, pair: tuple, now: float) -> int:
         with self._lock:
-            failures, until = self._state.get(name, ([], 0.0))
+            until = self._pairs.get(pair, ([], 0.0))[1]
             return max(1, int(until - now + 0.999)) if until > now else 0
 
-    def delay_for(self, name: str, now: float) -> float:
+    def delay_for(self, pair: tuple, name: str, now: float, *, known_device: bool = False) -> float:
+        """How long to wait before answering: the pair's pause, or the account-wide delay (skipped for a known device)."""
         with self._lock:
-            failures, _ = self._state.get(name, ([], 0.0))
-            return DELAY_SECONDS if sum(1 for t in failures if now - t < DELAY_WINDOW) >= DELAY_AFTER else 0.0
+            times = self._pairs.get(pair, ([], 0.0))[0]
+            pause = DELAY_SECONDS if sum(1 for t in times if now - t < DELAY_WINDOW) >= DELAY_AFTER else 0.0
+            extra = 0.0
+            if not known_device:
+                n = sum(1 for t in self._names.get(name, []) if now - t < LOCK_WINDOW)
+                if n > ACCOUNT_FREE_MISSES:
+                    extra = min(ACCOUNT_MAX_DELAY, float(2 ** min(n - ACCOUNT_FREE_MISSES, 10)))
+            return max(pause, extra)
 
-    def fail(self, name: str, now: float) -> bool:
-        """Record a failure. True when it locked the name."""
+    def fail(self, pair: tuple, name: str, now: float) -> bool:
+        """Record a miss. True when it blocked this pair."""
         with self._lock:
-            if len(self._state) >= GHOST_LIMIT and name not in self._state:
-                self._state.pop(next(iter(self._state)))
-            failures, until = self._state.get(name, ([], 0.0))
-            failures = [t for t in failures if now - t < LOCK_WINDOW] + [now]
-            if len(failures) >= LOCK_AFTER:
-                self._state[name] = ([], now + LOCK_SECONDS)
+            for table in (self._pairs, self._names):
+                if len(table) >= THROTTLE_LIMIT and (pair if table is self._pairs else name) not in table:
+                    table.pop(next(iter(table)))
+            self._names[name] = [t for t in self._names.get(name, []) if now - t < LOCK_WINDOW] + [now]
+            times, until = self._pairs.get(pair, ([], 0.0))
+            times = [t for t in times if now - t < LOCK_WINDOW] + [now]
+            if len(times) >= LOCK_AFTER:
+                self._pairs[pair] = ([], now + LOCK_SECONDS)
                 return True
-            self._state[name] = (failures, until)
+            self._pairs[pair] = (times, until)
             return False
 
+    def clear(self, pair: tuple) -> None:
+        with self._lock:
+            self._pairs.pop(pair, None)
 
-ghosts = _Ghosts()
+
+login_throttle = _Throttle()
+recover_throttle = _Throttle()          # its own bucket: password misses never block recovery, recovery misses never block sign-in
 
 
 def reset_limiters() -> None:
     """Forget in-memory counters (tests; a restart does the same). Account counters live in the database."""
     signup_window.reset()
-    ghosts.reset()
+    miss_window.reset()
+    login_throttle.reset()
+    recover_throttle.reset()
 
 
 def _ghost_name(username: str) -> str:
@@ -252,15 +293,6 @@ def _ghost_name(username: str) -> str:
 def _locked_seconds(row, now: float) -> int:
     until = float(row["locked_epoch"]) if row["locked_epoch"] is not None else 0.0
     return max(1, int(until - now + 0.999)) if until > now else 0
-
-
-def _recent_failures(row, now: float) -> list[float]:
-    raw = row["failures"] if isinstance(row["failures"], list) else []
-    return [float(t) for t in raw if isinstance(t, (int, float)) and now - float(t) < LOCK_WINDOW]
-
-
-def _delay_for(failures: list[float], now: float) -> float:
-    return DELAY_SECONDS if sum(1 for t in failures if now - t < DELAY_WINDOW) >= DELAY_AFTER else 0.0
 
 
 def _register_failure(uid: int, now: float) -> bool:
@@ -301,10 +333,26 @@ def _can_sign_in(row) -> bool:
     return row is not None and row["confirmed"] and row["verifier"] is not None and row["dek_by_password"] is not None
 
 
+_AUTH_SLOTS = threading.BoundedSemaphore(AUTH_INFLIGHT)
+
+
+def _derive(password: str, salt: bytes) -> tuple[bytes, bytes]:
+    """scrypt, behind a cap on how many hashes run or wait at once. A flood of sign-ins gets 429 at once instead of holding
+    threadpool threads (the session check needs them): at most AUTH_INFLIGHT threads are ever busy here."""
+    if not _AUTH_SLOTS.acquire(blocking=False):
+        raise AuthError(429, "login_busy", MESSAGES["login_busy"], retry_after=2)
+    try:
+        return vault.derive_password_keys(password, salt)
+    finally:
+        _AUTH_SLOTS.release()
+
+
 def _burn_scrypt(password: str) -> None:
     """The same work as checking a real password, so an unknown username takes as long as a wrong password."""
     try:
-        vault.derive_password_keys(password[:MAX_PASSWORD_LENGTH], _DUMMY_SALT)
+        _derive(password[:MAX_PASSWORD_LENGTH], _DUMMY_SALT)
+    except AuthError:
+        raise                                           # busy: the caller answers 429
     except Exception:                                   # noqa: BLE001  (timing only)
         pass
 
@@ -314,7 +362,7 @@ def _check_password(row, password: str) -> bytes | None:
     if not isinstance(password, str) or len(password) > MAX_PASSWORD_LENGTH or not password:
         _burn_scrypt("x")
         return None
-    verifier, kek = vault.derive_password_keys(password, bytes(row["scrypt_salt"]))
+    verifier, kek = _derive(password, bytes(row["scrypt_salt"]))
     if not vault.verifier_matches(verifier, bytes(row["verifier"])):
         return None
     try:
@@ -415,7 +463,7 @@ def signup(invite_code: str, username: str, password: str) -> tuple[str, str]:
         _check_invite(conn, invite_code, now)                    # cheap check first, so a wrong code costs no scrypt
 
     salt = secrets.token_bytes(16)
-    verifier, kek = vault.derive_password_keys(password, salt)
+    verifier, kek = _derive(password, salt)
     dek = vault.new_data_key()
     public, private = vault.new_keypair()
     code = vault.new_recovery_code()
@@ -548,9 +596,19 @@ def confirm_signup(token: str) -> SignedIn:
 
 # ───────────────────────── sign-in, sessions ─────────────────────────
 
-def login(username: str, password: str) -> Attempt:
+def _client_pair(name: str, row, client: str, device: tuple[int, str] | None) -> tuple[tuple, bool]:
+    """((name, client key), known_device). A browser that proves an earlier good sign-in to THIS account (a signed device id
+    the web layer checked) is counted on its own, apart from everyone who shares its network address."""
+    if device is not None and row is not None and device[0] == row["id"]:
+        return (name, "dev:" + device[1]), True
+    return (name, "ip:" + (client or "")), False
+
+
+def login(username: str, password: str, client: str = "", device: tuple[int, str] | None = None) -> Attempt:
     """Check a username and password. Unknown names, unconfirmed people and wrong passwords all cost one scrypt and get
-    the same message. The failure counters are per account, so one person's typos lock no one else out."""
+    the same message. Misses are counted per (account, client), never per account alone: a stranger who guesses a name
+    blocks only his own pair, and slows (never refuses) the account's other new clients. See the limiter notes at the top.
+    `client` is the network address; `device` is (uid, id) from a verified known-device cookie, or None."""
     now = _now()
     purge_unconfirmed(now)
     name = _ghost_name(username)
@@ -558,27 +616,27 @@ def login(username: str, password: str) -> Attempt:
     if isinstance(username, str) and username.strip():
         with db.connect_system("users: find a person to sign in") as conn:
             row = _user_by_name(conn, username.strip())
-    if not _can_sign_in(row):
-        locked = ghosts.locked_for(name, now)
-        if locked:
-            return Attempt("locked", retry_after=locked)
-        delay = ghosts.delay_for(name, now)
-        _burn_scrypt(password if isinstance(password, str) else "")
-        if ghosts.fail(name, now):
+    pair, known = _client_pair(name, row, client, device)
+    blocked = login_throttle.blocked_for(pair, now)
+    if blocked:
+        return Attempt("locked", retry_after=blocked)
+    if not known and miss_window.count(GLOBAL_MISS_WINDOW, now) >= GLOBAL_MISS_LIMIT:
+        raise AuthError(429, "login_busy", MESSAGES["login_busy"], retry_after=GLOBAL_MISS_WINDOW)
+    delay = login_throttle.delay_for(pair, name, now, known_device=known)
+
+    def miss() -> Attempt:
+        miss_window.add(now)
+        if login_throttle.fail(pair, name, now):
             return Attempt("locked", retry_after=LOCK_SECONDS)
         return Attempt("invalid", delay=delay)
 
-    locked = _locked_seconds(row, now)
-    if locked:
-        return Attempt("locked", retry_after=locked)
-    delay = _delay_for(_recent_failures(row, now), now)
+    if not _can_sign_in(row):
+        _burn_scrypt(password if isinstance(password, str) else "")
+        return miss()
     dek = _check_password(row, password)
     if dek is None:
-        if _register_failure(row["id"], now):
-            return Attempt("locked", retry_after=LOCK_SECONDS)
-        return Attempt("invalid", delay=delay)
-    if row["failures"] or row["locked_epoch"] is not None:
-        _clear_failures(row["id"])
+        return miss()
+    login_throttle.clear(pair)
     with db.connect_system("users: open a session") as conn:
         signed_in = _open_session_row(conn, row["id"], dek, now)
     return Attempt("ok", signed_in=signed_in, delay=delay)
@@ -673,7 +731,7 @@ def change_password(uid: int, keep_sid: str, current: str, new: str) -> int:
         raise AuthError(422, "invalid", problem, "new")
     row, dek = _verify_current(uid, current)
     salt = secrets.token_bytes(16)
-    verifier, kek = vault.derive_password_keys(new, salt)
+    verifier, kek = _derive(new, salt)
     with db.connect_system("users: change a password") as conn:
         updated = conn.execute("UPDATE users SET scrypt_salt = %s, verifier = %s, dek_by_password = %s, session_epoch = session_epoch + 1, "
                                "failures = '[]'::jsonb, locked_until = NULL WHERE id = %s RETURNING session_epoch",
@@ -693,10 +751,11 @@ def new_recovery_code_for(uid: int, password: str) -> str:
     return code
 
 
-def recover(username: str, recovery_code: str, new_password: str) -> str:
+def recover(username: str, recovery_code: str, new_password: str, client: str = "", device: tuple[int, str] | None = None) -> str:
     """Forgot the password: the recovery code unwraps the data key, a new password wraps it again, a NEW recovery code
     replaces the old one, and every session is signed out. Wrong username and wrong code look the same. This is the only
-    way back besides the password: there is no admin reset."""
+    way back besides the password: there is no admin reset. Misses are counted in the recovery bucket only (per account and
+    client), so nobody's password guesses can block it. The code has 125 bits, so the bucket only has to cap the work."""
     problem = password_problem(new_password)
     if problem:
         raise AuthError(422, "invalid", problem, "new_password")
@@ -707,26 +766,23 @@ def recover(username: str, recovery_code: str, new_password: str) -> str:
     if isinstance(username, str) and username.strip():
         with db.connect_system("users: find a person to recover") as conn:
             row = _user_by_name(conn, username.strip())
-    if not _can_sign_in(row) or row["dek_by_recovery"] is None or row["recovery_salt"] is None:
-        if ghosts.locked_for(name, now):
-            raise AuthError(429, "login_locked", MESSAGES["login_locked"], retry_after=ghosts.locked_for(name, now))
-        ghosts.fail(name, now)
-        raise bad
-    locked = _locked_seconds(row, now)
-    if locked:
-        raise AuthError(429, "login_locked", MESSAGES["login_locked"], retry_after=locked)
+    pair, _known = _client_pair(name, row, client, device)
+    blocked = recover_throttle.blocked_for(pair, now)
+    if blocked:
+        raise AuthError(429, "login_locked", MESSAGES["login_locked"], retry_after=blocked)
     dek = None
-    if isinstance(recovery_code, str) and 0 < len(recovery_code) <= 100:
+    if _can_sign_in(row) and row["dek_by_recovery"] is not None and row["recovery_salt"] is not None             and isinstance(recovery_code, str) and 0 < len(recovery_code) <= 100:
         try:
             dek = vault.unwrap_key(vault.recovery_key(recovery_code, bytes(row["recovery_salt"])), bytes(row["dek_by_recovery"]), "dek|recovery")
         except vault.VaultError:
             dek = None
     if dek is None:
-        if _register_failure(row["id"], now):
+        if recover_throttle.fail(pair, name, now):
             raise AuthError(429, "login_locked", MESSAGES["login_locked"], retry_after=LOCK_SECONDS)
         raise bad
+    recover_throttle.clear(pair)
     salt = secrets.token_bytes(16)
-    verifier, kek = vault.derive_password_keys(new_password, salt)
+    verifier, kek = _derive(new_password, salt)
     code = vault.new_recovery_code()
     recovery_salt = secrets.token_bytes(16)
     with db.connect_system("users: recover an account") as conn:

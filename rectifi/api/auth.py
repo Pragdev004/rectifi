@@ -295,6 +295,38 @@ def resolve_user(cookie_header: str | None):
     return users.open_session(data["uid"], data["sid"], data["k"], data["epoch"])
 
 
+# ───────────────────────── known-device cookie ─────────────────────────
+# A browser that signed in to an account once keeps a signed id for it. The sign-in limiter counts that browser on its own, so a
+# stranger who shares its network address (everyone arrives through the same proxy) cannot use up its tries. The cookie is not a
+# credential: it opens nothing, and a thief who has it still needs the password.
+
+DEVICE_COOKIE = "rectifi_device"
+DEVICE_SECONDS = 180 * 24 * 3600
+
+
+def make_device_cookie(secret: str, uid: int, device_id: str | None = None) -> tuple[str, str]:
+    """(cookie value, device id). Pass the id of an existing valid cookie to keep it; otherwise a fresh random one is made."""
+    device_id = device_id or secrets.token_hex(8)
+    body = _b64e(json.dumps({"uid": int(uid), "d": device_id}, separators=(",", ":"), sort_keys=True).encode())
+    return f"{body}.{_sign(secret, 'device.' + body)}", device_id
+
+
+def read_device_cookie(value: str | None, secret: str) -> tuple[int, str] | None:
+    """(uid, device id) of a cookie whose signature is right, else None."""
+    if not value or not secret or value.count(".") != 1 or len(value) > 300:
+        return None
+    body, signature = value.split(".")
+    try:
+        if not hmac.compare_digest(signature.encode("ascii"), _sign(secret, "device." + body).encode("ascii")):
+            return None
+        data = json.loads(_b64d(body))
+    except (ValueError, UnicodeError, binascii.Error):
+        return None
+    if not isinstance(data, dict) or type(data.get("uid")) is not int or not isinstance(data.get("d"), str) or not 4 <= len(data["d"]) <= 64:
+        return None
+    return data["uid"], data["d"]
+
+
 # ───────────────────────── login limiter ─────────────────────────
 
 class Outcome:
