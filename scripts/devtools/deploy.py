@@ -137,12 +137,11 @@ def _option(args: list[str], name: str) -> str | None:
 
 # ───────────────────────── set-password ─────────────────────────
 
-BLIND_KEY_NOTE = ("
-RECTIFI_BLIND_KEY is a server secret for several-people mode. It is never put in the database. Copy it somewhere
-"
-                  "safe that is NOT your database backups (a password manager): a backup with the key next to it protects nothing.
-"
-                  "If you lose it, people's duplicate-detection hashes are made again when they next sign in; no data is lost.")
+BLIND_KEY_NOTE = (
+    "\nRECTIFI_BLIND_KEY is a server secret for several-people mode. It is never put in the database. Copy it somewhere\n"
+    "safe that is NOT your database backups (a password manager): a backup with the key next to it protects nothing.\n"
+    "If you lose it, people's duplicate-detection hashes are made again when they next sign in; no data is lost.")
+
 
 def set_password(args: list[str]) -> None:
     if "-h" in args or "--help" in args:
@@ -167,14 +166,19 @@ def set_password(args: list[str]) -> None:
         raise SystemExit("No password was set.")
     values = env_lines(first)
     del first
+    values.update(blind_key_lines(ROOT / ".env.deploy" if show else target))
     if show:
-        print("\nPaste these two lines into .env.deploy (replace the empty ones):\n")
+        print("\nPaste these lines into .env.deploy (replace the empty ones):\n")
         for key, value in values.items():
             print(f"{key}={value}")
         print("\nChanging the password changes the session secret too, so everyone who was signed in is signed out.")
+        if "RECTIFI_BLIND_KEY" in values:
+            print(BLIND_KEY_NOTE)
         return
     write_env_values(target, values)
     print(f"\nSaved to {target}. Restart Rectifi for it to take effect.")
+    if "RECTIFI_BLIND_KEY" in values:
+        print(BLIND_KEY_NOTE)
     print("From now on every /api call needs a sign-in. Remove the two lines to go back to no password on your laptop.")
 
 
