@@ -168,6 +168,18 @@ def set_sweep_state(uid: int, state: str | None) -> None:
         conn.execute("UPDATE users SET sweep_state = %s WHERE id = %s", (state, int(uid)))
 
 
+def blind_fp(uid: int) -> str | None:
+    """The fingerprint of the server blind key that made this person's ingest hashes (never the key itself)."""
+    with db.connect_system("account: read the blind key fingerprint") as conn:
+        row = conn.execute("SELECT blind_fp FROM users WHERE id = %s", (int(uid),)).fetchone()
+    return row["blind_fp"] if row else None
+
+
+def set_blind_fp(uid: int, fingerprint: str) -> None:
+    with db.connect_system("account: save the blind key fingerprint") as conn:
+        conn.execute("UPDATE users SET blind_fp = %s WHERE id = %s", (fingerprint, int(uid)))
+
+
 def finish_sweep(uid: int) -> None:
     """The last step of the owner sweep: from now the database trigger refuses plain text for this person."""
     with db.connect_system("account: finish the sweep") as conn:
@@ -246,7 +258,8 @@ WHO_CAN_READ = (
      "sealed": "No (the same checks, and a different key)"},
     {"who": "Someone with a database dump or a stolen backup",
      "plain": "Yes, readable",
-     "sealed": "No, unless they crack the password (scrypt makes each guess slow)"},
+     "sealed": "No, unless they crack the password (scrypt makes each guess slow). The keyed hashes of UPI references and SMS "
+               "need the server's blind key too, which is not in the database or its backups."},
     {"who": "The person who runs the server (the owner), browsing the database",
      "plain": "Yes, readable",
      "sealed": "No"},
@@ -259,6 +272,8 @@ LIMITS = (
     "There is no password reset. The recovery code is the only way back. If you lose your password and your recovery code, "
     "your sealed text is gone for good.",
     "The encryption protects data at rest. While the server works, your password and your text are in its memory in clear.",
+    "The keyed hashes of UPI references and SMS use a server secret (RECTIFI_BLIND_KEY) that is not in the database or its backups. "
+    "They stop a leaked database, not the owner: whoever holds that secret and the database can test guesses against them.",
     "Rectifi's owner can change the code, so he could read your text if he chose to. Trust him, or do not join.",
     "The encryption is built from standard parts (AES-256-GCM, X25519, scrypt) put together by one person. No outside expert has reviewed it.",
     "Amounts, dates, categories, account names, last 4 digits and spending caps are plain so alerts work while you are signed out.",
@@ -295,6 +310,7 @@ def privacy_facts() -> dict:
         "backup_days": BACKUP_DAYS,
         "sealed_fields": [f"{t}.{c}" for t, c in sealed_fields.all_sealed()],
         "keyed_hash_fields": [f"{t}.{c}" for t, c in sealed_fields.all_blind()],
+        "hidden_key_fields": sealed_fields.all_hidden(),
         "plain_fields": list(sealed_fields.PLAIN_ON_PURPOSE),
         "unsealed_owner_tables": list(sealed_fields.OWNER_ONLY_TABLES),
         "merchant_allowlist": [{"key": b.key, "name": b.name} for b in merchant_allowlist.ALLOWED],

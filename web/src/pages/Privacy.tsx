@@ -60,7 +60,10 @@ export function PrivacyFactsView({ facts: f }: { facts: PrivacyFacts }) {
       <section>
         <h2>What is stored how</h2>
         <Group title="Sealed" names={f.sealed_fields} note="Encrypted per person." />
-        <Group title="Keyed hashes" names={f.keyed_hash_fields} note="One-way fingerprints." />
+        <Group title="Keyed hashes" names={f.keyed_hash_fields}
+          note="One-way fingerprints. Those from your own key can't be guessed from a database copy. UPI references and SMS also need the server's secret blind key, which is not in the database or its backups: a copy of the database alone can't test guesses, but the server owner (who has both) could." />
+        <Group title="Shop names hidden inside longer keys" names={f.hidden_key_fields}
+          note="A shop that is not on the list below is replaced by a hash made from your own key." />
         <Group title="Plain, on purpose" names={f.plain_fields} note="Alerts must work while you are signed out." />
         <Group title="Shops stored by name" names={f.merchant_allowlist.map((b) => b.name)} brand
           note="These shop names are plain, so a cap on them can fire while you are signed out." />

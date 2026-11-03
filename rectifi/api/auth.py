@@ -168,7 +168,7 @@ def startup_problem() -> str | None:
         if len(session_secret()) < MIN_SECRET_LENGTH:
             return (f"RECTIFI_SESSION_SECRET is missing or shorter than {MIN_SECRET_LENGTH} characters. "
                     "Run `python scripts/dev.py set-password`; it makes a new one.")
-        return None
+        return config.blind_key_problem()
     if parse_hash(password_hash()) is None:
         return ("Rectifi is reachable beyond this laptop (or a password is set) but RECTIFI_PASSWORD_HASH is missing or not "
                 "valid. Run `python scripts/dev.py set-password` and put the two lines it prints into your environment.")

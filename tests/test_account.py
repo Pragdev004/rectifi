@@ -322,6 +322,7 @@ def test_privacy_is_public_and_lists_every_sealed_field_and_every_brand_and_agre
     assert facts["mode"] == "multiuser" and facts["encryption_at_rest"] is True and config.multiuser()
     assert set(facts["sealed_fields"]) == {f"{t}.{c}" for t, c in sealed_fields.all_sealed()}
     assert set(facts["keyed_hash_fields"]) == {f"{t}.{c}" for t, c in sealed_fields.all_blind()}
+    assert set(facts["hidden_key_fields"]) == set(sealed_fields.all_hidden())
     assert {b["name"] for b in facts["merchant_allowlist"]} == set(merchant_allowlist.NAMES.values())
     assert {b["key"] for b in facts["merchant_allowlist"]} == set(merchant_allowlist.KEYS)
     assert facts["plain_fields"] == list(sealed_fields.PLAIN_ON_PURPOSE)
@@ -367,6 +368,8 @@ def test_the_privacy_document_lists_every_sealed_field_every_brand_and_every_pla
     assert len(text.splitlines()) < 200
     for table, column in sealed_fields.all_sealed() + sealed_fields.all_blind():
         assert f"{table}.{column}" in text, f"PRIVACY.md does not mention {table}.{column}"
+    for name in sealed_fields.all_hidden():
+        assert name in text, f"PRIVACY.md does not mention the hidden key {name}"
     for brand in merchant_allowlist.ALLOWED:
         assert brand.name.lower() in low, f"PRIVACY.md does not mention {brand.name}"
     for item in sealed_fields.PLAIN_ON_PURPOSE:

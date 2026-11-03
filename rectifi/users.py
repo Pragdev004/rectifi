@@ -496,9 +496,10 @@ def signup(invite_code: str, username: str, password: str) -> tuple[str, str]:
                     raise AuthError(409, "username_taken", MESSAGES["username_taken"], "username")
                 row = conn.execute(
                     "INSERT INTO users (username, scrypt_salt, verifier, dek_by_password, dek_by_recovery, recovery_salt, public_key, "
-                    "private_key_wrapped, ingest_salt, encrypted) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true) RETURNING id",
+                    "private_key_wrapped, ingest_salt, encrypted, blind_fp) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true, %s) RETURNING id",
                     (username, keys["scrypt_salt"], keys["verifier"], keys["dek_by_password"], keys["dek_by_recovery"],
-                     keys["recovery_salt"], keys["public_key"], keys["private_key_wrapped"], keys["ingest_salt"])).fetchone()
+                     keys["recovery_salt"], keys["public_key"], keys["private_key_wrapped"], keys["ingest_salt"],
+                     vault.blind_key_fingerprint())).fetchone()
                 uid = row["id"]
                 reserved = conn.execute("UPDATE invites SET reserved_by = %s WHERE id = %s AND reserved_by IS NULL AND used_at IS NULL "
                                         "RETURNING id", (uid, invite["id"])).fetchone()
@@ -585,8 +586,8 @@ def confirm_signup(token: str) -> SignedIn:
             raise expired
         if uid == OWNER_UID:                                  # before confirmed_at is set: until then the phone gateway writes nothing
             _rekey_owner_dedupe(_context_from(_user_by_id(conn, uid), dek))
-        conn.execute("UPDATE users SET confirmed_at = to_timestamp(%s), sweep_state = CASE WHEN id = %s THEN 'pending' ELSE sweep_state END "
-                     "WHERE id = %s", (now, OWNER_UID, uid))
+        conn.execute("UPDATE users SET confirmed_at = to_timestamp(%s), sweep_state = CASE WHEN id = %s THEN 'pending' ELSE sweep_state END, "
+                     "blind_fp = %s WHERE id = %s", (now, OWNER_UID, vault.blind_key_fingerprint(), uid))
         conn.execute("UPDATE invites SET used_at = to_timestamp(%s) WHERE id = %s", (now, invite["id"]))
         conn.execute("DELETE FROM user_sessions WHERE id = %s", (sid,))        # the sign-up token is spent; the cookie gets a new secret
         signed_in = _open_session_row(conn, uid, dek, now)

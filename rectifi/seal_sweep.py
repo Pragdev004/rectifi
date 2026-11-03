@@ -450,6 +450,79 @@ def run_in_background(ctx: userctx.UserContext) -> None:
         log.error("sweep stopped (%s); it carries on at the next sign-in", type(exc).__name__)
 
 
+# ───────────────────────── sign-in: the server blind key changed ─────────────────────────
+
+def _reblind_sources(conn, table: str, after, size: int) -> list[dict]:
+    """A page of rows whose ingest hash can be made again from data that is readable now (the connection opens sealed cells)."""
+    if table == "transactions":
+        return conn.execute("SELECT id, direction, category_source, upi_ref, upi_ref_sealed FROM transactions WHERE upi_ref LIKE 'b1:%%' "
+                            "AND upi_ref_sealed IS NOT NULL AND id > %s ORDER BY id LIMIT %s FOR UPDATE", (after or 0, size)).fetchall()
+    if table == "sms_inbox":
+        return conn.execute("SELECT id, sender, raw_text, sent_at, received_at, text_hash FROM sms_inbox WHERE text_hash LIKE 'b1:%%' "
+                            "AND raw_text IS NOT NULL AND id > %s ORDER BY id LIMIT %s FOR UPDATE", (after or 0, size)).fetchall()
+    return conn.execute("SELECT text_hash, digest_sealed FROM sms_seen WHERE digest_sealed IS NOT NULL AND text_hash LIKE 'b1:%%' "
+                        "AND text_hash > %s ORDER BY text_hash LIMIT %s FOR UPDATE", (after or "", size)).fetchall()
+
+
+def _reblind_value(table: str, row: dict) -> str | None:
+    from . import tools                                         # inside the function: tools imports a lot
+
+    if table == "transactions":
+        plain = row["upi_ref_sealed"]
+    elif table == "sms_inbox":
+        day = row["received_at"].date() if row["received_at"] else None
+        plain = tools._sms_digest(row["sender"], row["raw_text"], row["sent_at"], day)        # noqa: SLF001
+    else:
+        plain = row["digest_sealed"]
+    return vault.blind_ingest(plain) if plain and not vault.is_envelope(plain) else None
+
+
+def reblind(ctx: userctx.UserContext, *, batch: int = 500) -> dict:
+    """Make this person's ingest hashes (upi_ref, SMS digests) again under the CURRENT server blind key, from their own
+    decrypted data, then remember the key's fingerprint. Needed when RECTIFI_BLIND_KEY was lost or rotated: the stored hashes
+    were made with the old key and would no longer match anything new. No row is lost. An old hash that now clashes with one
+    written since (a signed-out SMS) is merged like any dedupe clash (`_apply`). Safe to run again. Returns {"rebuilt", "merged"}."""
+    if not config.multiuser() or ctx.key is None:
+        return {"rebuilt": 0, "merged": 0}
+    lock = _lock_for(-ctx.uid)                                   # a lock of its own: the sweep may be running
+    if not lock.acquire(blocking=False):
+        return {"rebuilt": 0, "merged": 0, "busy": True}
+    rebuilt = merged = 0
+    try:
+        with userctx.bound(ctx):
+            for table, col in (("transactions", "upi_ref"), ("sms_inbox", "text_hash"), ("sms_seen", "text_hash")):
+                spec, key, after = sealed_fields.SEALED[table], KEY.get(table, "id"), None
+                while True:
+                    with db.connect() as conn:
+                        rows = _reblind_sources(conn, table, after, batch)
+                        for row in rows:
+                            new = _reblind_value(table, row)
+                            if new and new != row[col]:
+                                did, dropped = _apply(conn, table, key, row, {col: new}, spec)
+                                rebuilt, merged = rebuilt + did, merged + dropped
+                    if not rows:
+                        break
+                    after = rows[-1][key]
+        account.set_blind_fp(ctx.uid, vault.blind_key_fingerprint())
+    finally:
+        lock.release()
+    if rebuilt or merged:
+        log.info("blind key changed: %s ingest hashes rebuilt, %s duplicate rows merged", rebuilt, merged)
+    return {"rebuilt": rebuilt, "merged": merged}
+
+
+def blind_key_changed(uid: int) -> bool:
+    """Was this person's last set of ingest hashes made with a different server blind key (or an unknown one)?"""
+    return account.blind_fp(uid) != vault.blind_key_fingerprint()
+
+
+def reblind_in_background(ctx: userctx.UserContext) -> None:
+    try:
+        reblind(ctx)
+    except Exception as exc:                                    # noqa: BLE001
+        log.error("re-keying after a blind key change stopped (%s); it carries on at the next sign-in", type(exc).__name__)
+
+
 # ───────────────────────── sign-in: rs1. -> rx1. ─────────────────────────
 
 def drain_rs1(ctx: userctx.UserContext) -> int:

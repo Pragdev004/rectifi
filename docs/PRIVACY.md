@@ -13,7 +13,7 @@ matches the code.
 | Who is looking | Plain data (amounts, dates, categories, account names, last 4 digits, caps, times, well-known shop names) | Sealed data (SMS text, narrations, every other payee, notes) |
 |---|---|---|
 | Another friend, through the app | No (the app checks, and the database shows each person only their own rows) | No (the same checks, and a different key) |
-| Someone with a database dump or a stolen backup | Yes, readable | No, unless they crack your password (scrypt makes each guess slow) |
+| Someone with a database dump or a stolen backup | Yes, readable | No, unless they crack your password (scrypt makes each guess slow). Keyed hashes of UPI references and SMS also need the server's blind key (see "Keyed hashes") |
 | The person who runs the server (the owner), browsing the database | Yes, readable | No |
 | The owner changing the code, or reading server memory or the login request | Yes | Yes. Passwords and SMS pass through the server in clear |
 
@@ -33,6 +33,7 @@ text in them once you are encrypted (a trigger, not only the app).
 - `weekly_reviews.commitment`
 - `phone_devices.name`
 - `sms_inbox.sender`, `sms_inbox.raw_text`, `sms_inbox.reason`
+- `sms_seen.digest_sealed` (the plain digest behind the SMS hash, kept so the hash can be made again)
 - `import_batches.filename`
 - `merchant_patterns.pattern`, `merchant_patterns.merchant`
 - `alert_rules.target` (only a cap on a shop that is not on the list below)
@@ -45,14 +46,32 @@ so the server can store it without being able to read it. It is moved under your
 ## Keyed hashes
 
 Some columns have to stay comparable so duplicates can be found, but must not leak the text behind them. They hold a
-keyed hash (`b1:` followed by an HMAC), not the text:
+keyed hash (`b1:` followed by an HMAC), not the text. There are two kinds, and they are not equally strong.
 
-- `transactions.upi_ref`, `transactions.fingerprint`
+Made with a key that comes from your own data key. No dump, backup or browsing of the database holds that key, so
+these cannot be guessed without your password:
+
+- `transactions.fingerprint`
 - `merchant_rules.pattern_blind`, `merchant_patterns.pattern_blind`, `alert_rules.target_blind`
+
+Made with your ingest salt (stored in the database) and the server's secret `RECTIFI_BLIND_KEY` (kept in the server's
+`.env`, not in the database and not in its backups). They have to work while you are signed out, so your data key cannot
+make them:
+
+- `transactions.upi_ref`
 - `sms_inbox.text_hash`, `sms_seen.text_hash`
 
-A hash cannot be read back. Someone who already knows a UPI reference could check whether it is in the database; they
-cannot list the references.
+A stolen dump or backup alone cannot test guesses against these. The server owner can: he holds the key and the database,
+and a 12-digit UPI reference has few possibilities. So they stop a leaked database, not the owner. If the key is lost or
+changed, your hashes are made again from your own decrypted data the next time you sign in. Nothing is lost.
+
+## Hidden shop names
+
+A shop that is not on the list below is your own text. Where its name sits inside a longer, otherwise plain key, it is
+replaced by a keyed hash made from your data key (so it cannot be guessed from a dump):
+
+- `alerts.dedupe_key`, `alerts.scope_key`
+- `alerts.prefs.muted_scopes`, `alerts.prefs.snoozed_scopes` (in the alert preferences)
 
 ## Plain on purpose
 

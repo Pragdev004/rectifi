@@ -28,6 +28,7 @@ export interface PrivacyFacts {
   backup_days: number;
   sealed_fields: string[];
   keyed_hash_fields: string[];
+  hidden_key_fields: string[];
   plain_fields: string[];
   unsealed_owner_tables: string[];
   merchant_allowlist: { key: string; name: string }[];

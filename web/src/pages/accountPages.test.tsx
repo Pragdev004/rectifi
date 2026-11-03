@@ -17,6 +17,7 @@ const FACTS: PrivacyFacts = {
   backup_days: 7,
   sealed_fields: ["transactions.payee", "transactions.raw_text", "sms_inbox.sender"],
   keyed_hash_fields: ["transactions.upi_ref", "sms_inbox.text_hash"],
+  hidden_key_fields: ["alerts.dedupe_key", "alerts.prefs.muted_scopes"],
   plain_fields: ["amount", "txn_date", "merchant_key (allow-listed brands only)"],
   unsealed_owner_tables: ["conversations", "trace_spans"],
   merchant_allowlist: [{ key: "swiggy", name: "Swiggy" }, { key: "dominos", name: "Domino's" }],
@@ -79,7 +80,7 @@ describe("Settings", () => {
 describe("Privacy", () => {
   const out = renderWith(<PrivacyFactsView facts={FACTS} />, null);
   it("carries every item the server lists", () => {
-    for (const name of [...FACTS.sealed_fields, ...FACTS.keyed_hash_fields, ...FACTS.plain_fields, ...FACTS.unsealed_owner_tables]) {
+    for (const name of [...FACTS.sealed_fields, ...FACTS.keyed_hash_fields, ...FACTS.hidden_key_fields, ...FACTS.plain_fields, ...FACTS.unsealed_owner_tables]) {
       expect(out).toContain(name.replace("'", "&#x27;"));
     }
     expect(out).toContain("Swiggy");

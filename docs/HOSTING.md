@@ -120,7 +120,7 @@ nano .env.deploy
 - `set-password --print` asks for your password twice, then prints two lines. The password must be at least 12 characters. Three or four random words works. It never shows or saves the password itself, only a scrambled copy.
 - In `nano`, set `RECTIFI_HOSTNAME`. Set `POSTGRES_PASSWORD` to the output of `openssl rand -hex 24`, and `RECTIFI_DB_PASSWORD` to the output of a second `openssl rand -hex 24`. They must be different. Save with Ctrl+O, Enter, Ctrl+X.
 - **One person:** paste the two lines from `set-password --print` over `RECTIFI_PASSWORD_HASH` and `RECTIFI_SESSION_SECRET`. Keep the single quotes around the hash.
-- **Several people:** set `RECTIFI_MULTIUSER=1` and `RECTIFI_SESSION_SECRET` to the output of `openssl rand -hex 32` (32 characters or more). Leave `RECTIFI_PASSWORD_HASH` empty: it is ignored. There is no shared password. People sign in with their own name and password after you invite them (see "Invite people").
+- **Several people:** set `RECTIFI_MULTIUSER=1`, `RECTIFI_SESSION_SECRET` to the output of `openssl rand -hex 32` (32 characters or more), and `RECTIFI_BLIND_KEY` to the output of a second `openssl rand -hex 32` (or keep the one `set-password --print` printed). The blind key is required: the app will not start without it, and `deploy-check` and `doctor` fail. See "Back up the blind key" below. Leave `RECTIFI_PASSWORD_HASH` empty: it is ignored. There is no shared password. People sign in with their own name and password after you invite them (see "Invite people").
 
 Now check everything:
 
@@ -128,7 +128,7 @@ Now check everything:
 python3 scripts/dev.py deploy-check
 ```
 
-It checks the passwords (it never prints them), that `RECTIFI_DB_PASSWORD` differs from `POSTGRES_PASSWORD`, that the session secret is 32 characters or more in multi-user mode, and that no port is published on every interface. Fix every line that says `FAIL`. Do not go on until it says `Ready to deploy.`
+It checks the passwords (it never prints them), that `RECTIFI_DB_PASSWORD` differs from `POSTGRES_PASSWORD`, that the session secret and the blind key are 32 characters or more in multi-user mode, and that no port is published on every interface. Fix every line that says `FAIL`. Do not go on until it says `Ready to deploy.`
 
 **Already ran an older version of this guide?** Your Docker volume was made when the database login `rectifi` was the superuser. That login skips the privacy check, so the app **refuses to start** in multi-user or public mode until you rebuild it. The init script runs only on a new volume. Do this once:
 
@@ -230,6 +230,8 @@ Check they exist:
 ```
 ls -lh /var/backups/rectifi
 ```
+
+**Back up the blind key (`RECTIFI_BLIND_KEY`) apart from these backups.** Several-people mode makes keyed hashes of UPI references and SMS (they find duplicates without storing the text). The hashes use the people's salts, which are in the database, and this key, which is not. That is the point: a stolen dump or backup alone cannot be used to guess them. So never put the key in the same place as the dumps. Keep a copy in your password manager (or somewhere else that is not the backup folder). If you lose it, nothing is lost: set a new one, restart, and each person's hashes are made again from their own data the next time they sign in (until then a re-sent SMS can look new once, and is merged afterwards). Note that whoever holds both the key and a dump can test guesses against those hashes, so protect the key like a password.
 
 **The backups run as `postgres`.** The app's own login is a plain role, and a plain role cannot dump tables that row level security forces. The backup container uses `POSTGRES_PASSWORD`; nothing else needs it.
 

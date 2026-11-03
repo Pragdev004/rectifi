@@ -73,7 +73,8 @@ def alerts_after_sign_in(ctx: userctx.UserContext) -> None:
 def account_after_sign_in(ctx: userctx.UserContext) -> None:
     """Every person: move text that was sealed while they were signed out (rs1.) to their data key (rx1.), in the tables
     WS-CORE's block does not cover. The owner: resume the sealing sweep if the claim left one pending or it stopped halfway
-    (a background thread that keeps the owner's context; it is safe to start again)."""
+    (a background thread that keeps the owner's context; it is safe to start again). Everyone: if the server's blind key changed
+    since their ingest hashes were made, make them again from their decrypted data (also a background thread)."""
     from . import config, seal_sweep
 
     if not config.multiuser() or ctx.key is None:
@@ -81,6 +82,8 @@ def account_after_sign_in(ctx: userctx.UserContext) -> None:
     seal_sweep.drain_rs1(ctx)
     if seal_sweep.should_run(ctx.uid):
         userctx.spawn(seal_sweep.run_in_background, ctx, name="rectifi-seal-sweep")
+    if seal_sweep.blind_key_changed(ctx.uid):               # RECTIFI_BLIND_KEY was lost or rotated: make the ingest hashes again
+        userctx.spawn(seal_sweep.reblind_in_background, ctx, name="rectifi-reblind")
 # ═══ WS-ACCOUNT: end ═══
 
 

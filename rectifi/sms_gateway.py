@@ -217,6 +217,9 @@ def create_app() -> Starlette:
 
     @asynccontextmanager
     async def lifespan(app):
+        if config.blind_key_problem():                  # multi-user mode cannot make its keyed hashes without the server's blind key
+            log.error("%s", config.blind_key_problem())
+            raise RuntimeError(config.blind_key_problem())
         try:
             await run_in_threadpool(init_db)
             if not config.multiuser():          # one person: set the alerts baseline now. Several people: each gets theirs at their first sweep

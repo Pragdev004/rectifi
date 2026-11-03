@@ -1033,10 +1033,10 @@ def authenticate_device(token: str | None) -> dict | None:
     return {"id": match["id"], "name": name, "uid": match["user_id"], "ctx": ctx}
 
 
-def _sms_digest(sender: str | None, text: str, sent_at: datetime | None) -> str:
+def _sms_digest(sender: str | None, text: str, sent_at: datetime | None, day: date | None = None) -> str:
     """Identifies one SMS. The phone's own timestamp (milliseconds) separates two identical texts;
-    without one, the same text on the same day counts as the same SMS."""
-    stamp = str(int(sent_at.timestamp() * 1000)) if sent_at else f"day:{today()}"
+    without one, the same text on the same day counts as the same SMS (`day` is only for making an old digest again)."""
+    stamp = str(int(sent_at.timestamp() * 1000)) if sent_at else f"day:{day or today()}"
     return hashlib.sha256(f"{sender or ''}|{stamp}|{text}".encode("utf-8")).hexdigest()
 
 

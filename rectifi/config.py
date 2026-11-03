@@ -200,6 +200,25 @@ def multiuser() -> bool:
     return _flag("RECTIFI_MULTIUSER")
 
 
+MIN_BLIND_KEY_LENGTH = 32
+
+
+def blind_key() -> bytes | None:
+    """RECTIFI_BLIND_KEY: a server secret that lives only in .env / .env.deploy, never in the database or its backups. It is mixed
+    into the keyed hashes of SMS and UPI references (vault.blind_ingest), so a stolen dump alone cannot be used to guess them.
+    None when it is missing or too short."""
+    value = os.getenv("RECTIFI_BLIND_KEY", "").strip()
+    return value.encode("utf-8") if len(value) >= MIN_BLIND_KEY_LENGTH else None
+
+
+def blind_key_problem() -> str | None:
+    """Why multi-user mode cannot start for lack of the blind key (None when it is fine, or not needed)."""
+    if not multiuser() or blind_key() is not None:
+        return None
+    return (f"RECTIFI_BLIND_KEY is missing or shorter than {MIN_BLIND_KEY_LENGTH} characters. It is a server secret kept in .env, "
+            "never in the database. Run `python scripts/dev.py set-password`; it makes one. Back it up apart from the database backups.")
+
+
 def web_search() -> bool:
     """Optional web search for the knowledge Q&A (RECTIFI_WEB_SEARCH=1). Off by default: your questions would leave the laptop."""
     return _flag("RECTIFI_WEB_SEARCH")

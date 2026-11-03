@@ -1,6 +1,7 @@
 """dev.py commands for hosting: set-password, deploy-check. Standard library only; dev.py loads this file by path.
 
     python scripts/dev.py set-password            ask for a password, write RECTIFI_PASSWORD_HASH and RECTIFI_SESSION_SECRET to .env
+                                                  (and RECTIFI_BLIND_KEY, only if there is none yet)
     python scripts/dev.py set-password --print    print the two lines instead (paste them into .env.deploy)
     python scripts/dev.py set-password --file F   write them into file F
     python scripts/dev.py deploy-check            check the hosting files and .env.deploy before you deploy
@@ -64,6 +65,16 @@ def env_lines(password: str) -> dict[str, str]:
     return {"RECTIFI_PASSWORD_HASH": f"'{hash_password(password)}'", "RECTIFI_SESSION_SECRET": secrets.token_urlsafe(48)}
 
 
+MIN_BLIND_KEY_LENGTH = 32
+
+
+def blind_key_lines(env_file: Path) -> dict[str, str]:
+    """RECTIFI_BLIND_KEY, only when `env_file` does not hold one already. Never replaced: a new key makes every person's ingest
+    hashes be made again at their next sign-in (nothing is lost, but it is work), so set-password keeps the one you have."""
+    held = read_env(env_file).get("RECTIFI_BLIND_KEY", "")
+    return {} if len(held) >= MIN_BLIND_KEY_LENGTH else {"RECTIFI_BLIND_KEY": secrets.token_urlsafe(48)}
+
+
 # ───────────────────────── env files ─────────────────────────
 
 def read_env(path: Path) -> dict[str, str]:
@@ -125,6 +136,13 @@ def _option(args: list[str], name: str) -> str | None:
 
 
 # ───────────────────────── set-password ─────────────────────────
+
+BLIND_KEY_NOTE = ("
+RECTIFI_BLIND_KEY is a server secret for several-people mode. It is never put in the database. Copy it somewhere
+"
+                  "safe that is NOT your database backups (a password manager): a backup with the key next to it protects nothing.
+"
+                  "If you lose it, people's duplicate-detection hashes are made again when they next sign in; no data is lost.")
 
 def set_password(args: list[str]) -> None:
     if "-h" in args or "--help" in args:
@@ -245,6 +263,12 @@ def check_env(rep: Report, root: Path, env_path: Path) -> dict[str, str] | None:
             rep.fail("RECTIFI_PASSWORD_HASH is missing or not valid. Run `python scripts/dev.py set-password --print`.")
         else:
             rep.ok("RECTIFI_PASSWORD_HASH looks right")
+    if multiuser:
+        if len(env.get("RECTIFI_BLIND_KEY", "")) < MIN_BLIND_KEY_LENGTH:
+            rep.fail(f"RECTIFI_BLIND_KEY is missing or shorter than {MIN_BLIND_KEY_LENGTH} characters. It is a server secret kept only here, "
+                     "never in the database. Make one with: openssl rand -hex 32. Back it up apart from the database backups.")
+        else:
+            rep.ok("RECTIFI_BLIND_KEY is set (back it up apart from the database backups)")
     if len(env.get("RECTIFI_SESSION_SECRET", "")) < MIN_SECRET_LENGTH:
         how = "Make one with: openssl rand -hex 32" if multiuser else "`set-password --print` makes one."
         rep.fail(f"RECTIFI_SESSION_SECRET is missing or shorter than {MIN_SECRET_LENGTH} characters. {how}")

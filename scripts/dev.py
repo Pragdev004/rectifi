@@ -711,6 +711,13 @@ def cmd_doctor(_args) -> None:
     else:
         r.warn(".env not found (defaults are used)", "Copy .env.example to .env if you want to change settings.")
 
+    if setting("RECTIFI_MULTIUSER").strip().lower() in ("1", "true", "yes", "on"):
+        if len(setting("RECTIFI_BLIND_KEY").strip()) >= 32:
+            r.ok("RECTIFI_BLIND_KEY is set (several-people mode)")
+        else:
+            r.fail("RECTIFI_BLIND_KEY is missing or shorter than 32 characters (several-people mode needs it; Rectifi will not start without it)",
+                   "Run `python scripts/dev.py set-password`; it makes one. Keep a copy apart from the database backups.")
+
     url = database_url()
     code, _ = _quiet([py, "-c", CHECK_DB])
     if code == 0:
