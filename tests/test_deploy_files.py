@@ -417,10 +417,20 @@ def test_deploy_check_fails_when_the_env_file_is_missing(tmp_path, capsys):
 
 
 def test_multiuser_needs_the_session_secret_but_not_the_password_hash(tmp_path, capsys):
-    path = _env_file(tmp_path, RECTIFI_MULTIUSER="1", RECTIFI_PASSWORD_HASH="", RECTIFI_SESSION_SECRET="s" * 40)
+    path = _env_file(tmp_path, RECTIFI_MULTIUSER="1", RECTIFI_PASSWORD_HASH="", RECTIFI_SESSION_SECRET="s" * 40,
+                     RECTIFI_BLIND_KEY="b" * 64)
     assert _run_check(path) == 0
     out = capsys.readouterr().out
-    assert "FAIL" not in out and "s" * 30 not in out
+    assert "FAIL" not in out and "s" * 30 not in out and "b" * 30 not in out
+
+
+@pytest.mark.parametrize("blind_key", ["", "b" * 31])
+def test_multiuser_fails_without_a_long_enough_blind_key(tmp_path, capsys, blind_key):
+    path = _env_file(tmp_path, RECTIFI_MULTIUSER="1", RECTIFI_PASSWORD_HASH="", RECTIFI_SESSION_SECRET="s" * 40,
+                     RECTIFI_BLIND_KEY=blind_key)
+    assert _run_check(path) == 1
+    out = capsys.readouterr().out
+    assert "FAIL  RECTIFI_BLIND_KEY" in out and "b" * 30 not in out
 
 
 def test_multiuser_rejects_a_short_session_secret(tmp_path, capsys):
