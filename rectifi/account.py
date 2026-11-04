@@ -212,9 +212,11 @@ OWNER_LIBRARY_DATA = ("checkpoint_writes", "checkpoint_blobs", "checkpoints", "s
 _OWNER_ORDER = ("rag_chunks", "alerts", "alert_rules", "push_subscriptions", "sms_inbox", "sms_seen", "transactions", "budgets",
                 "balance_snapshots", "merchant_rules", "merchant_patterns", "weekly_reviews", "classify_jobs", "import_batches",
                 "phone_devices", "accounts", "categories", "charts", "rag_documents", "trace_spans", "app_settings", "conversations")
+# sweep_state = 'deleted' (users.DELETED_MARK) says "this row 1 was emptied by an owner delete": the next owner claim wipes
+# row 1's rows once more (users.confirm_signup), so a write that landed late can never be inherited.
 _OWNER_RESET = ("username = 'owner', scrypt_salt = NULL, verifier = NULL, dek_by_password = NULL, dek_by_recovery = NULL, "
                 "recovery_salt = NULL, public_key = NULL, private_key_wrapped = NULL, ingest_salt = NULL, blind_fp = NULL, "
-                "session_epoch = session_epoch + 1, encrypted = false, confirmed_at = NULL, sweep_state = NULL, "
+                "session_epoch = session_epoch + 1, encrypted = false, confirmed_at = NULL, sweep_state = 'deleted', "
                 "failures = '[]'::jsonb, locked_until = NULL")
 
 
@@ -239,12 +241,18 @@ def _wipe_owner_rows() -> None:
         _wipe_owner_rows_on(conn)
 
 
-def _wipe_and_reset(conn) -> None:
-    """On the caller's system connection and in the caller's transaction: wipe the owner's rows, put the default categories
-    and rules back, and turn row 1 into an unclaimed owner again. Safe to run twice."""
+def wipe_owner_data(conn) -> None:
+    """On the caller's system connection and in the caller's transaction: every owner row in every table (tenant tables and the
+    chat's library tables), then the default categories and rules put back. users.confirm_signup calls this for a deleted row 1."""
     with db.tenant_scope(conn, userctx.UserContext(uid=OWNER_UID, strict=False)):
         _wipe_owner_rows_on(conn)
         db._migrate_categories(conn)                     # noqa: SLF001  (the same defaults seed_user gives)
+
+
+def _wipe_and_reset(conn) -> None:
+    """On the caller's system connection and in the caller's transaction: wipe the owner's rows, put the default categories
+    and rules back, and turn row 1 into an unclaimed owner again. Safe to run twice."""
+    wipe_owner_data(conn)
     conn.execute("DELETE FROM invites WHERE reserved_by = %s", (OWNER_UID,))        # the code the owner signed up with
     conn.execute(f"UPDATE users SET {_OWNER_RESET} WHERE id = %s", (OWNER_UID,))
 

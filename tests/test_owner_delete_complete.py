@@ -389,3 +389,58 @@ def test_drain_turns_cancels_a_running_turn_and_waits_for_it():
     assert finished == [True] and turn.cancelled.is_set() and not turn.lock.locked()
     ask._turns.pop(key, None)                                                     # noqa: SLF001
     ask.drain_turns(timeout=0.1)                                                  # nothing running: returns at once
+
+
+# ───────────── round 2: a late write is never inherited by the next owner ─────────────
+
+def test_a_write_after_the_delete_is_wiped_when_the_next_owner_claims_row_1():
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    delete(owner, "owner-person")
+    # a request that was still running (a Charts run, a slow Ask turn) writes AFTER delete_account returned
+    late = make_thread()
+    with as_user(1), db.connect() as conn:
+        conn.execute("INSERT INTO conversations (thread_id, title) VALUES (%s, 'late-after-sweep')", (late,))
+        conn.execute("INSERT INTO charts (title, prompt, code, kind, attempts) VALUES ('late-after-sweep', 'p', 'c', 'png', 1)")
+        conn.execute("INSERT INTO trace_spans (run_id, root_run_id, name, run_type, started_at) "
+                     "VALUES (gen_random_uuid(), gen_random_uuid(), 'late', 'chain', now())")
+        conn.execute("INSERT INTO categories (name, kind) VALUES ('Late Category', 'expense')")
+    mem.add_memory(get_memory().store, "owner", "fact", "late memory")
+    assert library_counts()["checkpoints"] >= 1
+
+    new_owner = sign_up("new-owner", kind="owner")                  # a new invite, sign-up and confirm
+    client = CLIENTS["new-owner"]
+    assert new_owner.uid == 1
+    threads = client.get("/api/chat/threads")
+    assert threads.status_code == 200 and threads.json() == {"threads": []}
+    charts = client.get("/api/charts")
+    assert charts.status_code == 200 and charts.json()["items"] == []
+    assert_owner_has_nothing_left()
+    with as_user(1), db.connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM categories WHERE name = 'Late Category'").fetchone()["n"] == 0
+        assert {r["name"] for r in conn.execute("SELECT name FROM categories").fetchall()} == {n for n, _ in db.DEFAULT_CATEGORIES}
+    assert mem.list_memories(get_memory().store, "owner") == []
+
+
+def test_a_normal_laptop_data_claim_keeps_its_data():
+    populate(1)                                                      # row 1 has data from the single-user days and was never deleted
+    before = tenant_counts(1)
+    assert before["transactions"] > 0
+    with db.connect_system("test: no mark") as conn:
+        assert conn.execute("SELECT sweep_state FROM users WHERE id = 1").fetchone()["sweep_state"] is None
+    sign_up("first-owner", kind="owner")
+    after = tenant_counts(1)
+    assert after["transactions"] == before["transactions"] and after["charts"] == before["charts"]
+    assert after["conversations"] == before["conversations"]
+
+
+def test_an_unconfirmed_claim_that_is_rolled_back_keeps_the_deleted_mark():
+    owner = sign_up("owner-person", kind="owner")
+    delete(owner, "owner-person")
+    code = users.create_invite("owner")["code"]
+    users.signup(code, "never-confirmed", PASSWORD)                  # claims row 1 but nobody confirms
+    with db.connect_system("test: expire it") as conn:
+        conn.execute("UPDATE user_sessions SET expires_at = now() - interval '1 hour' WHERE user_id = 1 AND pending")
+    users.purge_unconfirmed()
+    with db.connect_system("test: look") as conn:
+        assert conn.execute("SELECT sweep_state, verifier IS NULL AS u FROM users WHERE id = 1").fetchone() == {"sweep_state": "deleted", "u": True}

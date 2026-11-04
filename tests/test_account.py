@@ -280,7 +280,7 @@ def test_a_lone_owner_can_wipe_everything_and_start_again_with_a_new_owner_invit
     assert owner_client.get("/api/meta").status_code == 401
     with db.connect_system("test: row 1 is unclaimed") as conn:
         row = conn.execute("SELECT username, verifier, dek_by_password, confirmed_at, encrypted, sweep_state FROM users WHERE id = 1").fetchone()
-    assert dict(row) == {"username": "owner", "verifier": None, "dek_by_password": None, "confirmed_at": None, "encrypted": False, "sweep_state": None}
+    assert dict(row) == {"username": "owner", "verifier": None, "dek_by_password": None, "confirmed_at": None, "encrypted": False, "sweep_state": "deleted"}
     assert users.create_invite("owner")["code"]                                           # the door is open again
     assert row_count("categories", 1) > 5                                                 # the defaults are back
 
