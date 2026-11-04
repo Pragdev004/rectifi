@@ -166,12 +166,10 @@ def test_a_sign_in_flood_gets_429_at_once_and_does_not_hold_the_threads_the_app_
     assert r.status_code in (200, 429)
 
 
-def test_a_flood_of_misses_makes_new_clients_wait_but_known_devices_still_sign_in(monkeypatch):
+def test_a_flood_of_misses_never_refuses_a_new_client_who_has_the_right_password():
+    """Round 2, N2 (the reviewer probe P3): there is no global miss budget any more. The only global 429 is the cap on hashes in flight."""
     make_account()
-    uid = users.login("alice", PASSWORD, "home").signed_in.uid
-    for i in range(users.GLOBAL_MISS_LIMIT):
-        users.miss_window.add(time.time())
-    with pytest.raises(users.AuthError) as err:
-        users.login("alice", PASSWORD, "new")
-    assert err.value.status == 429 and err.value.code == "login_busy"
-    assert users.login("alice", PASSWORD, "new", device=(uid, "abcd1234")).status == "ok"
+    for i in range(users.ACCOUNT_FREE_MISSES * 3):                                # junk misses from many addresses, any names
+        users.login(f"ghost{i}", WRONG, f"10.1.{i // 200}.{i % 200}")
+    assert not hasattr(users, "GLOBAL_MISS_LIMIT")
+    assert users.login("alice", PASSWORD, "new").status == "ok"

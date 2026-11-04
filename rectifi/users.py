@@ -56,7 +56,13 @@ TOUCH_SECONDS = 5 * 60                  # last_seen_at is written at most this o
 #     "Client" is the browser's known-device id (a signed cookie from an earlier good sign-in) or else its network address.
 #   * per account, across all clients: a response delay that grows with the misses (never a refusal, and a known device skips it).
 #   * recovery counts in its own bucket, so password misses never block it (and the other way round).
-#   * globally: a cap on password hashing in flight (AUTH_INFLIGHT; the rest get 429 at once) and a budget of misses per minute.
+#   * globally: ONE cap, on password hashing in flight (AUTH_INFLIGHT; the rest get 429 at once). There is no budget of misses that
+#     refuses new clients: a stranger's junk must never keep real people out (round 2, N2).
+#   * every good sign-in, sign-up confirm and recovery sets the signed device cookie (api/routes/auth.py), so a person who is
+#     behind the same proxy address as a stranger is a known device and is never refused or delayed for the stranger's misses.
+#   * `client` is the real client address only when RECTIFI_TRUSTED_PROXIES vouches for the proxy (api/auth.client_address).
+#     Residual: a brand-new browser, behind a shared address, while a stranger is failing from that same address, can be blocked
+#     for 15 minutes. The recovery code always works there (its own bucket) and gives that browser its device cookie.
 DELAY_AFTER = 5                         # misses within DELAY_WINDOW by one client that start a pause
 DELAY_WINDOW = 60
 DELAY_SECONDS = 2.0
@@ -65,8 +71,6 @@ LOCK_WINDOW = 15 * 60
 LOCK_SECONDS = 15 * 60
 ACCOUNT_FREE_MISSES = 10                # misses on one account (all clients, LOCK_WINDOW) before the account-wide delay starts
 ACCOUNT_MAX_DELAY = 30.0                # that delay doubles per miss up to this many seconds
-GLOBAL_MISS_LIMIT = 120                 # misses from anyone per GLOBAL_MISS_WINDOW; beyond it only known devices may try
-GLOBAL_MISS_WINDOW = 60
 AUTH_INFLIGHT = 4                       # password hashes running or waiting at once (vault runs 2); more are refused with 429 at once
 SIGNUP_LIMIT = 10                       # sign-up attempts, from anyone, per SIGNUP_WINDOW (global: every request is from 127.0.0.1)
 SIGNUP_WINDOW = 3600
@@ -222,7 +226,6 @@ class _Window:
 
 
 signup_window = _Window()
-miss_window = _Window()                 # every sign-in miss from anyone (the global budget)
 
 
 class _Throttle:
@@ -282,7 +285,6 @@ recover_throttle = _Throttle()          # its own bucket: password misses never 
 def reset_limiters() -> None:
     """Forget in-memory counters (tests; a restart does the same). Account counters live in the database."""
     signup_window.reset()
-    miss_window.reset()
     login_throttle.reset()
     recover_throttle.reset()
 
@@ -632,12 +634,9 @@ def login(username: str, password: str, client: str = "", device: tuple[int, str
     blocked = login_throttle.blocked_for(pair, now)
     if blocked:
         return Attempt("locked", retry_after=blocked)
-    if not known and miss_window.count(GLOBAL_MISS_WINDOW, now) >= GLOBAL_MISS_LIMIT:
-        raise AuthError(429, "login_busy", MESSAGES["login_busy"], retry_after=GLOBAL_MISS_WINDOW)
     delay = login_throttle.delay_for(pair, name, now, known_device=known)
 
     def miss() -> Attempt:
-        miss_window.add(now)
         if login_throttle.fail(pair, name, now):
             return Attempt("locked", retry_after=LOCK_SECONDS)
         return Attempt("invalid", delay=delay)
@@ -700,6 +699,15 @@ def end_all_sessions(uid: int) -> int:
         conn.execute("DELETE FROM user_sessions WHERE user_id = %s", (int(uid),))
         row = conn.execute("UPDATE users SET session_epoch = session_epoch + 1 WHERE id = %s RETURNING session_epoch", (int(uid),)).fetchone()
     return row["session_epoch"] if row else 0
+
+
+def uid_of(username: str) -> int | None:
+    """The id of the account with this username (any case), or None. For the web layer, right after a proof of who they are."""
+    if not isinstance(username, str) or not username.strip():
+        return None
+    with db.connect_system("users: find an id by name") as conn:
+        row = conn.execute("SELECT id FROM users WHERE lower(username) = lower(%s) AND confirmed_at IS NOT NULL", (username.strip(),)).fetchone()
+    return row["id"] if row else None
 
 
 def profile(uid: int) -> dict | None:

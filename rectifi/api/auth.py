@@ -11,7 +11,7 @@ The pieces:
                   HttpOnly, SameSite=Strict, Path=/, 7 days, Secure in public mode
   epoch           app_settings.session_epoch. A cookie only works while its epoch matches, so bumping the number signs
                   everyone out at once ("sign out everywhere")
-  login limiter   global (every request reaches us from 127.0.0.1, so there is no IP to count): 5 failures in a minute
+  login limiter   (single password) global (every request reaches us from 127.0.0.1, so there is no IP to count): 5 failures in a minute
                   adds a 2 second pause to each try; 10 failures in 15 minutes locks sign-in for 15 minutes
 
 Multi-user mode (RECTIFI_MULTIUSER=1) is the same cookie with three more fields: uid, sid (a user_sessions row) and k (the
@@ -325,6 +325,48 @@ def read_device_cookie(value: str | None, secret: str) -> tuple[int, str] | None
     if not isinstance(data, dict) or type(data.get("uid")) is not int or not isinstance(data.get("d"), str) or not 4 <= len(data["d"]) <= 64:
         return None
     return data["uid"], data["d"]
+
+
+# ───────────────────────── who is the client ─────────────────────────
+
+def _as_ip(text: str):
+    import ipaddress
+
+    try:
+        ip = ipaddress.ip_address(text.strip().strip("[]"))
+    except ValueError:
+        return None
+    return ip.ipv4_mapped if getattr(ip, "ipv4_mapped", None) else ip
+
+
+def _limiter_key(ip) -> str:
+    """The text the limiter counts. An IPv6 client is counted by its /64 (one person usually has a whole /64 to hand out)."""
+    import ipaddress
+
+    if ip.version == 6:
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False).network_address)
+    return str(ip)
+
+
+def client_address(peer: str | None, forwarded_for: str | None, trusted: tuple) -> str:
+    """The address the sign-in limiter should count for one request.
+
+    `peer` is the socket's address. A forwarded header (X-Forwarded-For) is believed ONLY when the peer is one of the `trusted`
+    proxies (RECTIFI_TRUSTED_PROXIES; empty by default, so the header is ignored). Even then the list is read from the right:
+    each hop that is itself a trusted proxy is skipped, and the first address that is not one is the client. Anything a client
+    wrote at the left of the list is never reached. A header that is not an address is ignored (the peer is used)."""
+    peer_ip = _as_ip(peer or "")
+    if peer_ip is None:
+        return peer or ""
+    if not trusted or not any(peer_ip in net for net in trusted if net.version == peer_ip.version):
+        return _limiter_key(peer_ip)
+    for hop in reversed((forwarded_for or "").split(",")):
+        ip = _as_ip(hop)
+        if ip is None:
+            break
+        if not any(ip in net for net in trusted if net.version == ip.version):
+            return _limiter_key(ip)
+    return _limiter_key(peer_ip)
 
 
 # ───────────────────────── login limiter ─────────────────────────

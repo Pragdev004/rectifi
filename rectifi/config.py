@@ -186,6 +186,24 @@ def bind_host() -> str:
     return value
 
 
+def trusted_proxies() -> tuple:
+    """RECTIFI_TRUSTED_PROXIES: comma-separated addresses or networks (127.0.0.1, 172.16.0.0/12, ::1) of reverse proxies whose
+    X-Forwarded-For header may be believed. Default: empty, so a forwarded header is ignored and the peer address is the client.
+    A word that is not an address or network is skipped (nothing is trusted because of a typo)."""
+    import ipaddress
+
+    out = []
+    for part in _env("RECTIFI_TRUSTED_PROXIES").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            continue
+    return tuple(out)
+
+
 def public_mode() -> bool:
     """True when the app is reachable from beyond this laptop: RECTIFI_PUBLIC=1, or a bind host that is not loopback.
     Public mode needs its own login (RECTIFI_PASSWORD_HASH and RECTIFI_SESSION_SECRET)."""

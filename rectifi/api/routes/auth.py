@@ -41,7 +41,9 @@ def _device(request) -> tuple[int, str] | None:
 
 
 def _client(request) -> str:
-    return request.client.host if request.client else ""
+    """The address the limiter counts: the socket's peer, or (only from a RECTIFI_TRUSTED_PROXIES peer) the forwarded client."""
+    peer = request.client.host if request.client else ""
+    return auth.client_address(peer, request.headers.get("x-forwarded-for"), config.trusted_proxies())
 
 
 def _remember_device(response: Response, request, uid: int) -> None:
@@ -245,6 +247,9 @@ async def recover(request):
         return _refusal(result)
     response = _ok({"recovery_code": result})                    # the NEW code; the old one no longer works; everyone is signed out
     _clear_cookie(response)
+    uid = await _call(users.uid_of, data["username"])           # the recovery code proved who this is: this browser is a known device now
+    if isinstance(uid, int):
+        _remember_device(response, request, uid)
     return response
 
 
