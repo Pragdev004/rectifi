@@ -370,6 +370,7 @@ LIMITS = (
     "sealed text stays sealed, amounts and dates are readable, and the owner's chat, charts, library and traces are readable.",
     "Server memory and swap can hold decrypted text until it is overwritten.",
     "The owner's own AI tables (chat, charts, library, traces) are not sealed in this phase. They hold only the owner's data.",
+    "The owner account is deleted on the server only (stop Rectifi, then run python scripts/dev.py reset-owner), never from the web app.",
     "The model that sorts payments and answers the owner's chat is the one named under 'model'. Friends' data is never sent to any model.",
 )
 

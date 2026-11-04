@@ -13,6 +13,7 @@ Everything built before the multi-user work is in [docs/PROGRESS_HISTORY.md](doc
 
 ## Known gaps (from the final review; login hardening and edge cases, no data exposure)
 
+- Owner delete is terminal-only (`dev.py reset-owner`, Rectifi stopped; the web route answers 403): a chat answer or chart run still running in the server can write a row after a delete, and that cannot be fenced while the app runs. The claim also wipes a row 1 marked 'deleted'.
 - N11: a junk-name flood can push an account's backoff out of the 10,000-entry limiter table, so guesses rise to about 11 per 10,000 junk requests.
 - A stranger's flood fills the 4-slot "other" lane: new browsers, sign-up, the owner claim, change password and new recovery code get 429.
 - A stranger who keeps failing holds NEW browsers of that account at 429 `login_wait`; a known device or the recovery code gets in.
