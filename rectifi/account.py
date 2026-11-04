@@ -13,7 +13,8 @@ Delete. Needs the password (checked through `users`, a miss counts against the a
 users row is deleted and the foreign keys (ON DELETE CASCADE) remove every row in every table, sessions included. The owner
 (row 1) cannot be deleted while friends exist; with no friends the owner's rows are wiped (tenant tables, and the chat's
 own LangGraph tables: long-term memory and every checkpoint, listed or not) and row 1 goes back to an unclaimed state so a
-new owner invite can be issued. Old backups still hold the encrypted text for up to BACKUP_DAYS days.
+new owner invite can be issued. All of it is one transaction that first locks the people tables and revokes the owner's
+sessions; chat turns still running are stopped afterwards and a last sweep clears whatever they wrote. Old backups still hold the encrypted text for up to BACKUP_DAYS days.
 
 This module also holds the few queries on the people tables that the sealing sweep needs (sweep_state, encrypted), so
 `db.connect_system` is called from one extra file only (see docs/handoffs/ws-account.md).
@@ -202,54 +203,92 @@ def _forget_in_memory(uid: int) -> None:
 
 # LangGraph's own tables (sealed_fields.LIBRARY_TABLES): no user_id, no row level security, owner-only by the route gate.
 # Chat memory (`store`: namespace ("users", "owner", "memories"), plus `store_vectors` if an index was ever configured) and
-# every chat checkpoint (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) can only have been made by the owner: the AI
-# is owner-only (rule 20) and thread ids are random uuids with no owner marker. delete_account refuses while any friend
-# exists, so when the owner is wiped these tables hold nobody else's rows and are emptied whole. That also catches threads
-# that are no longer in `conversations`. The *_migrations tables hold schema versions only and stay.
+# every chat checkpoint (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) can only have been made by the owner: friends
+# cannot use the AI (rule 20), and thread ids are random uuids with no owner marker. So these tables are emptied whole, which
+# also catches threads that are no longer in `conversations`. (delete_account also refuses while a friend exists.) The *_migrations tables hold schema versions only and stay.
 OWNER_LIBRARY_DATA = ("checkpoint_writes", "checkpoint_blobs", "checkpoints", "store_vectors", "store")
 
 
-def _wipe_owner_rows() -> None:
-    """The owner's rows, deleted under the owner's own context (row level security keeps it to user 1), in ONE transaction.
-    Children first; the foreign keys' ON DELETE rules do the rest. tests/test_account.py checks the list covers
-    db.TENANT_TABLES. Then the library tables above (the caller has already proved no friend exists)."""
+_OWNER_ORDER = ("rag_chunks", "alerts", "alert_rules", "push_subscriptions", "sms_inbox", "sms_seen", "transactions", "budgets",
+                "balance_snapshots", "merchant_rules", "merchant_patterns", "weekly_reviews", "classify_jobs", "import_batches",
+                "phone_devices", "accounts", "categories", "charts", "rag_documents", "trace_spans", "app_settings", "conversations")
+_OWNER_RESET = ("username = 'owner', scrypt_salt = NULL, verifier = NULL, dek_by_password = NULL, dek_by_recovery = NULL, "
+                "recovery_salt = NULL, public_key = NULL, private_key_wrapped = NULL, ingest_salt = NULL, blind_fp = NULL, "
+                "session_epoch = session_epoch + 1, encrypted = false, confirmed_at = NULL, sweep_state = NULL, "
+                "failures = '[]'::jsonb, locked_until = NULL")
+
+
+def _wipe_owner_rows_on(conn) -> None:
+    """The owner's rows, children first (the foreign keys' ON DELETE rules do the rest), then the library tables above. `conn`
+    must already be bound to user 1 (row level security keeps the first part to that person)."""
     from psycopg import errors
 
-    order = ("rag_chunks", "alerts", "alert_rules", "push_subscriptions", "sms_inbox", "sms_seen", "transactions", "budgets",
-             "balance_snapshots", "merchant_rules", "merchant_patterns", "weekly_reviews", "classify_jobs", "import_batches",
-             "phone_devices", "accounts", "categories", "charts", "rag_documents", "trace_spans", "app_settings", "conversations")
+    for table in _OWNER_ORDER:
+        conn.execute(f'DELETE FROM "{table}"')
+    for library in OWNER_LIBRARY_DATA:
+        try:
+            with conn.transaction():                     # a savepoint: a table that was never created is not an error
+                conn.execute(f'DELETE FROM "{library}"')
+        except errors.UndefinedTable:
+            pass
+
+
+def _wipe_owner_rows() -> None:
+    """The same wipe on its own connection, under the owner's context (used by tests; delete_account uses `_wipe_and_reset`)."""
     with db.connect() as conn:
-        for table in order:
-            conn.execute(f'DELETE FROM "{table}"')
-        for library in OWNER_LIBRARY_DATA:
-            try:
-                with conn.transaction():                 # a savepoint: a table that was never created is not an error
-                    conn.execute(f'DELETE FROM "{library}"')
-            except errors.UndefinedTable:
-                pass
+        _wipe_owner_rows_on(conn)
 
 
-def delete_account(uid: int, username: str, password: str, confirm_username: str) -> dict:
-    """Delete the signed-in person's account and every row they own. Raises users.AuthError (status, code, message, field)."""
+def _wipe_and_reset(conn) -> None:
+    """On the caller's system connection and in the caller's transaction: wipe the owner's rows, put the default categories
+    and rules back, and turn row 1 into an unclaimed owner again. Safe to run twice."""
+    with db.tenant_scope(conn, userctx.UserContext(uid=OWNER_UID, strict=False)):
+        _wipe_owner_rows_on(conn)
+        db._migrate_categories(conn)                     # noqa: SLF001  (the same defaults seed_user gives)
+    conn.execute("DELETE FROM invites WHERE reserved_by = %s", (OWNER_UID,))        # the code the owner signed up with
+    conn.execute(f"UPDATE users SET {_OWNER_RESET} WHERE id = %s", (OWNER_UID,))
+
+
+def _delete_owner() -> None:
+    """ONE transaction, in this order, so a failure at any step leaves the claimed account and all its data as they were:
+    1. lock the people tables: nobody can sign up, confirm or claim until we commit (the users table, then row 1, then
+       the owner's invites: the same order sign-up/confirm/purge take them), so the friend check below cannot go stale;
+    2. refuse while any friend exists;
+    3. revoke every owner session and bump the epoch FIRST: a request that comes in later is refused with 401;
+    4. wipe and reset (`_wipe_and_reset`)."""
+    with db.connect_system("account: delete the owner") as conn:
+        conn.execute("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE")
+        conn.execute("SELECT 1 FROM users WHERE id = %s FOR UPDATE", (OWNER_UID,))
+        conn.execute("SELECT 1 FROM invites WHERE reserved_by = %s FOR UPDATE", (OWNER_UID,))
+        if _friend_count(conn):
+            raise users.AuthError(409, "owner_has_friends", "Other people still use this Rectifi. Remove their accounts first.")
+        conn.execute("DELETE FROM user_sessions WHERE user_id = %s", (OWNER_UID,))
+        conn.execute("UPDATE users SET session_epoch = session_epoch + 1 WHERE id = %s", (OWNER_UID,))
+        _wipe_and_reset(conn)
+
+
+def _sweep_owner_stragglers() -> None:
+    """After the commit and after in-flight chat turns have stopped: a request that was already running when the sessions were
+    revoked may have written one more row. Clear again, but only while row 1 is still unclaimed (never a new owner's data)."""
+    with db.connect_system("account: sweep after the owner delete") as conn:
+        if conn.execute("SELECT 1 FROM users WHERE id = %s AND verifier IS NULL FOR UPDATE", (OWNER_UID,)).fetchone() is not None:
+            _wipe_and_reset(conn)
+
+
+def delete_account(uid: int, username: str, password: str, confirm_username: str, drain=None) -> dict:
+    """Delete the signed-in person's account and every row they own. Raises users.AuthError (status, code, message, field).
+    `drain` (owner only): called after the commit; it stops and waits for chat turns that were running (api/ask.py), then one
+    more sweep catches anything they wrote."""
     if not config.multiuser():
         raise users.AuthError(400, "not_multiuser", "Accounts only exist when Rectifi runs in multi-user mode.")
     if not isinstance(confirm_username, str) or confirm_username.strip().lower() != (username or "").lower():
         raise users.AuthError(422, "invalid", "Type your username exactly to confirm.", "confirm_username")
     users._verify_current(int(uid), password)             # counts a wrong password against the account  # noqa: SLF001
     if int(uid) == OWNER_UID:
-        with db.connect_system("account: count the other people") as conn:
-            if _friend_count(conn):
-                raise users.AuthError(409, "owner_has_friends", "Other people still use this Rectifi. Remove their accounts first.")
-        with userctx.bound(userctx.UserContext(uid=OWNER_UID, strict=False)):
-            _wipe_owner_rows()
-        with db.connect_system("account: reset the owner row") as conn:
-            conn.execute("DELETE FROM user_sessions WHERE user_id = %s", (OWNER_UID,))
-            conn.execute("DELETE FROM invites WHERE reserved_by = %s", (OWNER_UID,))        # the code the owner signed up with
-            conn.execute("UPDATE users SET username = 'owner', scrypt_salt = NULL, verifier = NULL, dek_by_password = NULL, "
-                         "dek_by_recovery = NULL, recovery_salt = NULL, public_key = NULL, private_key_wrapped = NULL, "
-                         "ingest_salt = NULL, blind_fp = NULL, session_epoch = session_epoch + 1, encrypted = false, confirmed_at = NULL, "
-                         "sweep_state = NULL, failures = '[]'::jsonb, locked_until = NULL WHERE id = %s", (OWNER_UID,))
-        db.seed_user(OWNER_UID)
+        _delete_owner()
+        if drain is not None:
+            drain()
+        _sweep_owner_stragglers()
     else:
         with db.connect_system("account: delete a person") as conn:
             deleted = conn.execute("DELETE FROM users WHERE id = %s", (int(uid),)).rowcount

@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ... import account, config, users
-from .. import auth
+from .. import ask, auth
 from ..errors import error_response
 from ..inputs import api
 
@@ -35,7 +35,7 @@ def delete(request, data):
     if not isinstance(confirm, str) or not confirm.strip() or len(confirm) > 100:
         return error_response(422, "invalid", "Type your username to confirm.", "confirm_username")
     try:
-        account.delete_account(who.uid, who.username, password, confirm)
+        account.delete_account(who.uid, who.username, password, confirm, drain=ask.drain_turns)
     except users.AuthError as exc:
         headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
         return error_response(exc.status, exc.code, exc.message, exc.field, headers=headers)

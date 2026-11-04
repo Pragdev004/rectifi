@@ -369,6 +369,21 @@ def delete_chat(thread_id: str) -> bool:
     return tools.conversation_delete(thread_id)
 
 
+def drain_turns(timeout: float = 15.0) -> None:
+    """Stop every running chat turn and wait (up to `timeout` seconds in all) until each has let go of its lock. Used when the
+    owner deletes the account, so no turn writes a checkpoint after the wipe."""
+    import time
+
+    with _turns_guard:
+        running = list(_turns.values())
+    for turn in running:
+        turn.cancelled.set()
+    deadline = time.monotonic() + timeout
+    for turn in running:
+        if turn.lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            turn.lock.release()
+
+
 def request_stop(thread_id: str) -> bool:
     """Ask the running turn to stop at the next model call. False if nothing is running."""
     turn = _turns.get(thread_id)

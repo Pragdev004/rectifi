@@ -3,9 +3,14 @@
 Before: `delete_account` for the owner removed every tenant row, but left the LangGraph long-term memory (`store`) and the
 checkpoints of any chat thread that was no longer listed in `conversations`. PRIVACY.md said "every row you own in every
 table", which was not true for the owner. These tests walk EVERY public table.
+
+Review fixes: the delete is one transaction that locks the people tables and revokes the owner's sessions FIRST; a chat turn
+that was running is stopped and a last sweep clears what it wrote.
 """
 
 import operator
+import threading
+import time
 import uuid
 from typing import Annotated, TypedDict
 
@@ -27,6 +32,7 @@ PEOPLE_TABLES = {"users", "invites", "user_sessions", "allowed_merchants"}
 RESEEDED = {"categories", "merchant_rules", "app_settings"}          # seed_user puts the defaults back after an owner wipe
 MIGRATIONS = {"checkpoint_migrations", "store_migrations", "vector_migrations"}      # schema versions only, no user data
 LIBRARY = ("checkpoints", "checkpoint_blobs", "checkpoint_writes", "store", "store_vectors")
+CLIENTS: dict[str, TestClient] = {}          # the browser each test person signed up with, by username
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +43,7 @@ def multiuser(monkeypatch):
     monkeypatch.setenv("RECTIFI_SESSION_SECRET", SECRET)
     monkeypatch.setattr(hooks, "after_sign_in", lambda ctx: None)
     users.reset_limiters()
+    CLIENTS.clear()
 
     async def no_pause(seconds):
         return None
@@ -47,7 +54,7 @@ def multiuser(monkeypatch):
 
 
 def sign_up(username: str, kind="friend"):
-    client = TestClient(create_app(), base_url="http://127.0.0.1:8501", headers=HEADERS, raise_server_exceptions=False)
+    client = CLIENTS[username] = TestClient(create_app(), base_url="http://127.0.0.1:8501", headers=HEADERS, raise_server_exceptions=False)
     code = users.create_invite(kind)["code"]
     body = client.post("/api/auth/signup", json={"invite": code, "username": username, "password": PASSWORD}).json()
     assert client.post("/api/auth/signup/confirm", json={"signup_token": body["signup_token"]}).status_code == 200
@@ -76,10 +83,12 @@ def make_thread() -> str:
 
 
 def seed_owner(ctx) -> dict:
-    """Every kind of owner data: tenant rows (populate), settings, a long-term memory, a LISTED thread, an UNLISTED thread."""
+    """Every kind of owner data: tenant rows (populate), settings, a custom category, a long-term memory, a LISTED thread, an
+    UNLISTED thread."""
     ids = populate(ctx)
     with as_user(ctx), db.connect() as conn:
         conn.execute("INSERT INTO app_settings (key, value) VALUES ('owner_pref', '\"x\"'::jsonb)")
+        conn.execute("INSERT INTO categories (name, kind) VALUES ('Owner Custom', 'expense')")
     memory = get_memory()
     mem.add_memory(memory.store, "owner", "fact", "I am a student")
     listed, unlisted = make_thread(), make_thread()
@@ -119,6 +128,13 @@ def delete(ctx, name: str) -> None:
 def public_tables() -> list[str]:
     with db.connect_system("test: list tables") as conn:
         return [r["tablename"] for r in conn.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").fetchall()]
+
+
+def assert_owner_has_nothing_left() -> None:
+    assert library_counts() == {t: 0 for t in LIBRARY}
+    counts = tenant_counts(1)
+    for table in set(db.TENANT_TABLES) - RESEEDED:
+        assert counts[table] == 0, f"{table} still has owner rows"
 
 
 def test_the_seed_really_puts_data_in_every_owner_place():
@@ -176,6 +192,8 @@ def test_deleting_the_owner_leaves_no_owner_row_in_any_table():
 
     # what seed_user puts back is only the defaults: no custom setting, no learned rule, no custom category
     with as_user(1), db.connect() as conn:
+        assert {r["name"] for r in conn.execute("SELECT name FROM categories").fetchall()} == {n for n, _ in db.DEFAULT_CATEGORIES}
+        assert conn.execute("SELECT count(*) AS n FROM categories WHERE name = 'Owner Custom'").fetchone()["n"] == 0
         assert [r["key"] for r in conn.execute("SELECT key FROM app_settings").fetchall()] == ["categories_v2"]
         assert conn.execute("SELECT count(*) AS n FROM merchant_rules WHERE source <> 'default'").fetchone()["n"] == 0
 
@@ -221,3 +239,153 @@ def test_the_library_table_list_matches_what_the_row_level_security_test_calls_l
     assert set(account.OWNER_LIBRARY_DATA) == set(LIBRARY)
     assert set(account.OWNER_LIBRARY_DATA) | MIGRATIONS == set(sealed_fields.LIBRARY_TABLES)
     assert userctx.OWNER_UID == 1
+
+
+# ───────────── review fixes: one transaction, sessions first, no straggler survives ─────────────
+
+def test_the_sessions_are_revoked_before_the_wipe_and_an_old_cookie_is_refused_afterwards(monkeypatch):
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    client = CLIENTS["owner-person"]
+    assert client.get("/api/meta").status_code == 200
+    real, seen = account._wipe_owner_rows_on, {}                                  # noqa: SLF001
+
+    def spy(conn):
+        if seen:                                       # the straggler sweep calls it again
+            return real(conn)
+        seen["sessions"] = conn.execute("SELECT count(*) AS n FROM user_sessions WHERE user_id = 1").fetchone()["n"]
+        seen["epoch"] = conn.execute("SELECT session_epoch FROM users WHERE id = 1").fetchone()["session_epoch"]
+        real(conn)
+
+    with db.connect_system("test: epoch before") as conn:
+        epoch_before = conn.execute("SELECT session_epoch FROM users WHERE id = 1").fetchone()["session_epoch"]
+    monkeypatch.setattr(account, "_wipe_owner_rows_on", spy)
+    delete(owner, "owner-person")
+    assert seen["sessions"] == 0 and seen["epoch"] == epoch_before + 1           # revoked first, inside the same transaction
+    assert client.get("/api/meta").status_code == 401
+    assert client.post("/api/memory", json={"kind": "fact", "text": "late write"}).status_code == 401
+    assert_owner_has_nothing_left()
+
+
+def test_a_turn_that_writes_while_it_is_being_stopped_leaves_nothing_behind():
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    calls = []
+
+    def drain():                                       # what a running Ask turn does: finish its step and write one more thread
+        calls.append(1)
+        late = make_thread()
+        with as_user(1), db.connect() as conn:
+            conn.execute("INSERT INTO conversations (thread_id, title) VALUES (%s, 'late')", (late,))
+            conn.execute("INSERT INTO trace_spans (run_id, root_run_id, name, run_type, started_at) "
+                         "VALUES (gen_random_uuid(), gen_random_uuid(), 'late', 'chain', now())")
+        mem.add_memory(get_memory().store, "owner", "fact", "late memory")
+
+    assert account.delete_account(1, "owner-person", PASSWORD, "owner-person", drain=drain) == {"ok": True}
+    assert calls == [1]
+    assert_owner_has_nothing_left()
+    with db.connect_system("test: still unclaimed") as conn:
+        assert conn.execute("SELECT verifier IS NULL AS u FROM users WHERE id = 1").fetchone()["u"] is True
+
+
+def test_the_straggler_sweep_never_touches_a_new_owners_data():
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+
+    def drain():                                       # someone claims row 1 again before the sweep runs
+        with db.connect_system("test: claim") as conn:
+            conn.execute("UPDATE users SET verifier = '\\x01'::bytea WHERE id = 1")
+        with as_user(1), db.connect() as conn:
+            conn.execute("INSERT INTO app_settings (key, value) VALUES ('new_owner', 'true'::jsonb)")
+
+    account.delete_account(1, "owner-person", PASSWORD, "owner-person", drain=drain)
+    with as_user(1), db.connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM app_settings WHERE key = 'new_owner'").fetchone()["n"] == 1
+
+
+def test_a_sign_up_cannot_slip_in_between_the_friend_check_and_the_wipe(monkeypatch):
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    code = users.create_invite("friend")["code"]
+    real, outcome = account._wipe_owner_rows_on, {}                              # noqa: SLF001
+
+    def joiner():
+        try:
+            users.signup(code, "late-friend", PASSWORD)
+            outcome["done"] = True
+        except Exception as exc:                       # noqa: BLE001
+            outcome["error"] = type(exc).__name__
+
+    def wipe_while_a_friend_tries_to_join(conn):
+        if outcome:                                    # the straggler sweep calls it again
+            return real(conn)
+        thread = threading.Thread(target=joiner)
+        thread.start()
+        outcome["thread"] = thread
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:             # the sign-up is queued behind our table lock
+            with db.connect_system("test: who waits") as other:
+                if other.execute("SELECT count(*) AS n FROM pg_locks WHERE NOT granted").fetchone()["n"]:
+                    break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("the sign-up was not blocked by the delete's lock")
+        assert "done" not in outcome and thread.is_alive()
+        real(conn)
+
+    monkeypatch.setattr(account, "_wipe_owner_rows_on", wipe_while_a_friend_tries_to_join)
+    delete(owner, "owner-person")
+    outcome["thread"].join(30)
+    assert not outcome["thread"].is_alive()
+    # the friend joined only after the delete committed, so the delete saw no friend and left a clean, unclaimed row 1
+    assert_owner_has_nothing_left()
+
+
+def test_a_friend_who_is_already_there_still_stops_the_delete_under_the_lock():
+    owner = sign_up("owner-person", kind="owner")
+    sign_up("friend-person")
+    seed_owner(owner)
+    before = library_counts()
+    with pytest.raises(users.AuthError) as refused:
+        delete(owner, "owner-person")
+    assert refused.value.status == 409 and library_counts() == before
+    assert CLIENTS["owner-person"].get("/api/meta").status_code == 200          # a refused delete does not sign the owner out
+
+
+def test_a_failed_reset_leaves_the_claimed_account_with_all_its_data(monkeypatch):
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    before_tenant, before_library = tenant_counts(1), library_counts()
+
+    def boom(conn):
+        raise RuntimeError("probe: the reset failed")
+
+    monkeypatch.setattr(db, "_migrate_categories", boom)
+    with pytest.raises(RuntimeError):
+        delete(owner, "owner-person")
+    monkeypatch.undo()
+    assert tenant_counts(1) == before_tenant and library_counts() == before_library
+    with db.connect_system("test: still claimed") as conn:
+        assert conn.execute("SELECT verifier IS NOT NULL AS v FROM users WHERE id = 1").fetchone()["v"] is True
+        assert conn.execute("SELECT count(*) AS n FROM user_sessions WHERE user_id = 1 AND NOT pending").fetchone()["n"] >= 1
+
+
+def test_drain_turns_cancels_a_running_turn_and_waits_for_it():
+    from rectifi.api import ask
+
+    key = "11111111-1111-1111-1111-111111111111"
+    turn = ask.turn_for(key)
+    assert turn.lock.acquire(blocking=False)
+    finished = []
+
+    def worker():
+        turn.cancelled.wait(5)
+        time.sleep(0.2)
+        finished.append(True)
+        turn.lock.release()
+
+    threading.Thread(target=worker).start()
+    ask.drain_turns(timeout=10)
+    assert finished == [True] and turn.cancelled.is_set() and not turn.lock.locked()
+    ask._turns.pop(key, None)                                                     # noqa: SLF001
+    ask.drain_turns(timeout=0.1)                                                  # nothing running: returns at once
