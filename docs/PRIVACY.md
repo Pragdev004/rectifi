@@ -116,8 +116,9 @@ as a formula is defused). Settings can also delete your account: it needs your p
 removes every row you own in every table and signs you out everywhere. For the owner this includes the chat's own tables:
 the things Rectifi was asked to remember and every saved chat thread, also threads that no longer show in the chat list.
 (Friends cannot use the AI, so those tables hold only the owner's data. The owner can also delete the account only after
-every friend account is gone.) The delete is one step: it revokes the owner's sessions first, stops any chat answer that is
-still running, and clears what that answer wrote.
+every friend account is gone.) The delete is one step: it revokes the owner's sessions first, then wipes. Chat answers and
+chart runs that were still going are asked to stop and given a few seconds. One that does not stop in time may write a last
+row after the delete. So the row is marked as deleted, and the next owner's sign-up wipes it again before they see anything.
 Old backups keep your data for up to 7 days (the backup days on the live page). Sealed text stays sealed there, but amounts
 and dates are readable, like any plain data. For the owner, the chat, charts, library, traces and memories are not sealed in
 this phase, so a backup keeps them readable for up to 7 days. Rows deleted from the database can also stay as dead rows and

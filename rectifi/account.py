@@ -14,7 +14,9 @@ users row is deleted and the foreign keys (ON DELETE CASCADE) remove every row i
 (row 1) cannot be deleted while friends exist; with no friends the owner's rows are wiped (tenant tables, and the chat's
 own LangGraph tables: long-term memory and every checkpoint, listed or not) and row 1 goes back to an unclaimed state so a
 new owner invite can be issued. All of it is one transaction that first locks the people tables and revokes the owner's
-sessions; chat turns still running are stopped afterwards and a last sweep clears whatever they wrote. Old backups still hold the encrypted text for up to BACKUP_DAYS days.
+sessions; chat turns and chart runs still going are asked to stop afterwards and a last sweep clears whatever they wrote. A
+late write after that is wiped by the next owner's confirm (row 1 carries sweep_state 'deleted').
+Old backups still hold the data for up to BACKUP_DAYS days (sealed text stays sealed; the rest is readable).
 
 This module also holds the few queries on the people tables that the sealing sweep needs (sweep_state, encrypted), so
 `db.connect_system` is called from one extra file only (see docs/handoffs/ws-account.md).
