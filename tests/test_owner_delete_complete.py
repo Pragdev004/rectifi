@@ -332,10 +332,10 @@ def test_a_failed_reset_leaves_the_claimed_account_with_all_its_data(monkeypatch
     def boom(conn):
         raise RuntimeError("probe: the reset failed")
 
-    monkeypatch.setattr(db, "_migrate_categories", boom)
-    with pytest.raises(RuntimeError):
-        delete(owner, "owner-person")
-    monkeypatch.undo()
+    with monkeypatch.context() as m:             # undo ONLY this patch: a bare monkeypatch.undo() also drops fresh_db's DATABASE_URL
+        m.setattr(db, "_migrate_categories", boom)
+        with pytest.raises(RuntimeError):
+            delete(owner, "owner-person")
     assert tenant_counts(1) == before_tenant and library_counts() == before_library
     with db.connect_system("test: still claimed") as conn:
         assert conn.execute("SELECT verifier IS NOT NULL AS v FROM users WHERE id = 1").fetchone()["v"] is True

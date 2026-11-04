@@ -206,7 +206,7 @@ def test_memory_rebuilds_after_close_and_reports_a_missing_database(monkeypatch)
     second = checkpoint.get_memory()
     assert second is not first
     checkpoint.close_memory()
-    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:x@127.0.0.1:9/nothing")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:x@127.0.0.1:9/nothing_test")
     with pytest.raises(db.DatabaseUnavailable):
         checkpoint.get_memory()
 

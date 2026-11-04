@@ -236,11 +236,12 @@ def build_graph(llm=None, checkpointer=None, tools=None):
 
 def postgres_checkpointer():
     """Conversation memory in the same Postgres database, so chats survive app restarts."""
-    import psycopg
     from langgraph.checkpoint.postgres import PostgresSaver
     from psycopg.rows import dict_row
 
-    conn = psycopg.connect(config.database_url(), autocommit=True, prepare_threshold=0, row_factory=dict_row)
+    from ..db import raw_connect
+
+    conn = raw_connect(autocommit=True, prepare_threshold=0, row_factory=dict_row)
     saver = PostgresSaver(conn)
     saver.setup()
     return saver
