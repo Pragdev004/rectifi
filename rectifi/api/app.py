@@ -1,6 +1,6 @@
 """The web app's server: /api (JSON) and the built browser app (web/dist), on one port.
 
-    python -m uvicorn --factory rectifi.api.app:create_app --host 127.0.0.1 --port 8501
+    python -m uvicorn --factory rectifi.api.app:create_app --host 127.0.0.1 --port 8501 --no-proxy-headers
 
 Run exactly one worker: the pending uploads, the recent-imports list and the Ask locks live in memory.
 """

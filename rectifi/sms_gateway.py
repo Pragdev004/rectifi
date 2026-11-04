@@ -327,7 +327,8 @@ def main() -> None:
     """`python -m rectifi.sms_gateway`. `dev.py phone` runs uvicorn on the same factory."""
     import uvicorn
 
-    uvicorn.run(create_app(), host=config.sms_host(), port=config.sms_port(), log_level="info")
+    # proxy_headers=False: uvicorn's default would believe X-Forwarded-For from 127.0.0.1 and rewrite the client address.
+    uvicorn.run(create_app(), host=config.sms_host(), port=config.sms_port(), log_level="info", proxy_headers=False)
 
 
 if __name__ == "__main__":

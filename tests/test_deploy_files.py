@@ -57,7 +57,7 @@ def test_dockerfile_has_a_healthcheck_on_the_health_route(parsed):
 def test_dockerfile_starts_one_worker_and_trusts_no_proxy_headers(parsed):
     cmd = _instructions(parsed, "CMD")[-1]["value"]
     assert "--workers" in cmd and '"1"' in cmd and "--factory" in cmd and "rectifi.api.app:create_app" in cmd
-    assert "proxy-headers" not in cmd and "forwarded-allow-ips" not in cmd
+    assert '"--no-proxy-headers"' in cmd and "forwarded-allow-ips" not in cmd           # uvicorn's own default would trust 127.0.0.1
 
 
 def test_dockerfile_bakes_in_no_secret_and_downloads_nothing_with_add(parsed):
