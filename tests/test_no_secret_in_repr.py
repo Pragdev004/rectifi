@@ -8,6 +8,7 @@ public, add it to PUBLIC below WITH a reason. Never add a real secret there.
 
 import dataclasses
 import importlib
+import inspect
 import pkgutil
 
 import pytest
@@ -55,7 +56,11 @@ def classes():
 
 
 def own_repr(cls) -> bool:
-    return "__repr__" in cls.__dict__
+    """True when the class body writes its own __repr__. The one @dataclass generates does not count: it shows every field
+    (it is compiled from a string, so its code has no real file name)."""
+    fn = cls.__dict__.get("__repr__")
+    code = getattr(inspect.unwrap(fn) if fn is not None else None, "__code__", None)      # dataclasses wraps its repr in a helper
+    return code is not None and code.co_filename != "<string>"
 
 
 def hidden_state(cls):
