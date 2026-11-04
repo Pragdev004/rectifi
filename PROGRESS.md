@@ -29,7 +29,7 @@ Everything built before the multi-user work is in [docs/PROGRESS_HISTORY.md](doc
 - The session cookie is `Secure` only in public mode (`RECTIFI_PUBLIC=1`, which the Funnel steps set).
 - The last person's key stays on an idle pooled connection's row factory until the next checkout (memory hygiene only).
 - Friends can call `/api/phone/status` (the server's MagicDNS name and published ports).
-- **Owner account delete leaves the LangGraph chat memories and unlisted thread checkpoints**, so PRIVACY.md's "every row" claim is not true for the owner. Only the operator can issue a new owner invite. Fix this before a server ever changes hands.
+- Only the operator can issue a new owner invite (so an owner delete cannot be undone from the app).
 - N3: the signed-out alerts sweep raises `VaultLocked` on an unsealed custom-merchant name, so the owner's alerts wait for the seal sweep.
 - N5 (suspected): the SMS inbox digest day uses the DB timezone in the re-blind and the process timezone at ingest; a same-day resend after a key change can land in the inbox twice.
 - An SMS with no UPI reference, resent during a blind-key change before that person signs in, can be added twice (nothing lost).

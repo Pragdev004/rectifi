@@ -11,8 +11,9 @@ hashes, embeddings and chart images (see EXCLUDED_TABLES and DROP_COLUMNS).
 
 Delete. Needs the password (checked through `users`, a miss counts against the account) and the typed username. A friend's
 users row is deleted and the foreign keys (ON DELETE CASCADE) remove every row in every table, sessions included. The owner
-(row 1) cannot be deleted while friends exist; with no friends the owner's rows are wiped and row 1 goes back to an unclaimed
-state so a new owner invite can be issued. Old backups still hold the encrypted text for up to BACKUP_DAYS days.
+(row 1) cannot be deleted while friends exist; with no friends the owner's rows are wiped (tenant tables, and the chat's
+own LangGraph tables: long-term memory and every checkpoint, listed or not) and row 1 goes back to an unclaimed state so a
+new owner invite can be issued. Old backups still hold the encrypted text for up to BACKUP_DAYS days.
 
 This module also holds the few queries on the people tables that the sealing sweep needs (sweep_state, encrypted), so
 `db.connect_system` is called from one extra file only (see docs/handoffs/ws-account.md).
@@ -199,23 +200,31 @@ def _forget_in_memory(uid: int) -> None:
         categorize._index_cache.pop(key, None)                                        # noqa: SLF001
 
 
+# LangGraph's own tables (sealed_fields.LIBRARY_TABLES): no user_id, no row level security, owner-only by the route gate.
+# Chat memory (`store`: namespace ("users", "owner", "memories"), plus `store_vectors` if an index was ever configured) and
+# every chat checkpoint (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) can only have been made by the owner: the AI
+# is owner-only (rule 20) and thread ids are random uuids with no owner marker. delete_account refuses while any friend
+# exists, so when the owner is wiped these tables hold nobody else's rows and are emptied whole. That also catches threads
+# that are no longer in `conversations`. The *_migrations tables hold schema versions only and stay.
+OWNER_LIBRARY_DATA = ("checkpoint_writes", "checkpoint_blobs", "checkpoints", "store_vectors", "store")
+
+
 def _wipe_owner_rows() -> None:
-    """The owner's rows, deleted under the owner's own context (row level security keeps it to user 1). Children first;
-    the foreign keys' ON DELETE rules do the rest. tests/test_account.py checks the list covers db.TENANT_TABLES."""
+    """The owner's rows, deleted under the owner's own context (row level security keeps it to user 1), in ONE transaction.
+    Children first; the foreign keys' ON DELETE rules do the rest. tests/test_account.py checks the list covers
+    db.TENANT_TABLES. Then the library tables above (the caller has already proved no friend exists)."""
     from psycopg import errors
 
     order = ("rag_chunks", "alerts", "alert_rules", "push_subscriptions", "sms_inbox", "sms_seen", "transactions", "budgets",
              "balance_snapshots", "merchant_rules", "merchant_patterns", "weekly_reviews", "classify_jobs", "import_batches",
-             "phone_devices", "accounts", "categories", "charts", "rag_documents", "trace_spans", "app_settings")
+             "phone_devices", "accounts", "categories", "charts", "rag_documents", "trace_spans", "app_settings", "conversations")
     with db.connect() as conn:
-        threads = [r["thread_id"] for r in conn.execute("SELECT thread_id FROM conversations").fetchall()]
         for table in order:
             conn.execute(f'DELETE FROM "{table}"')
-        conn.execute("DELETE FROM conversations")
-        for library in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):          # the chat's own store, by thread
+        for library in OWNER_LIBRARY_DATA:
             try:
-                with conn.transaction():
-                    conn.execute(f'DELETE FROM "{library}" WHERE thread_id = ANY(%s)', (threads,))
+                with conn.transaction():                 # a savepoint: a table that was never created is not an error
+                    conn.execute(f'DELETE FROM "{library}"')
             except errors.UndefinedTable:
                 pass
 
@@ -235,9 +244,10 @@ def delete_account(uid: int, username: str, password: str, confirm_username: str
             _wipe_owner_rows()
         with db.connect_system("account: reset the owner row") as conn:
             conn.execute("DELETE FROM user_sessions WHERE user_id = %s", (OWNER_UID,))
+            conn.execute("DELETE FROM invites WHERE reserved_by = %s", (OWNER_UID,))        # the code the owner signed up with
             conn.execute("UPDATE users SET username = 'owner', scrypt_salt = NULL, verifier = NULL, dek_by_password = NULL, "
                          "dek_by_recovery = NULL, recovery_salt = NULL, public_key = NULL, private_key_wrapped = NULL, "
-                         "ingest_salt = NULL, session_epoch = session_epoch + 1, encrypted = false, confirmed_at = NULL, "
+                         "ingest_salt = NULL, blind_fp = NULL, session_epoch = session_epoch + 1, encrypted = false, confirmed_at = NULL, "
                          "sweep_state = NULL, failures = '[]'::jsonb, locked_until = NULL WHERE id = %s", (OWNER_UID,))
         db.seed_user(OWNER_UID)
     else:
