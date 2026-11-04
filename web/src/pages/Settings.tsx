@@ -116,7 +116,7 @@ function Export() {
   );
 }
 
-function DeleteAccount({ username }: { username: string }) {
+function DeleteAccount({ username, isOwner }: { username: string; isOwner: boolean }) {
   const qc = useQueryClient();
   const [password, setPassword] = useState("");
   const [typed, setTyped] = useState("");
@@ -135,7 +135,8 @@ function DeleteAccount({ username }: { username: string }) {
   return (
     <Panel id="del-h" title="Delete my account" danger>
       <Callout tone="over" lead="This cannot be undone, and there is no reset.">
-        Everything you own is deleted. Backups can keep sealed copies for a few days.
+        Everything you own is deleted. Backups can keep copies for a few days: sealed text stays sealed, but amounts and dates are readable.
+        {isOwner && " Your chat, memories, charts, library and traces are not sealed, so a backup keeps them readable."}
       </Callout>
       <SecretForm className={s.form} problem={problem} fields={["password", "confirm_username"]} onSubmit={submit}>
         <PasswordField label="Your password" name="current-password" autoComplete="current-password" error={fieldProblem(problem, "password")}
@@ -170,7 +171,7 @@ export default function SettingsPage() {
           <ChangePassword />
           <NewCode username={data.username} />
           <Export />
-          <DeleteAccount username={data.username} />
+          <DeleteAccount username={data.username} isOwner={data.is_owner} />
         </div>
       )}
     </>

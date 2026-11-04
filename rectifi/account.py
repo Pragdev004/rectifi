@@ -328,7 +328,8 @@ LIMITS = (
     "Amounts, dates, categories, account names, last 4 digits and spending caps are plain so alerts work while you are signed out.",
     "A payment to a well-known shop on the list below also has its shop name stored in plain text. Every other payee is sealed.",
     "Your phone's alert address and keys are plain, because a push must be sent while you are signed out.",
-    "Backups can hold old copies. After you delete your account, its sealed text stays in backups for up to the backup days shown here.",
+    "Backups can hold old copies. After you delete your account, its data stays in backups for up to the backup days shown here: "
+    "sealed text stays sealed, amounts and dates are readable, and the owner's chat, charts, library and traces are readable.",
     "Server memory and swap can hold decrypted text until it is overwritten.",
     "The owner's own AI tables (chat, charts, library, traces) are not sealed in this phase. They hold only the owner's data.",
     "The model that sorts payments and answers the owner's chat is the one named under 'model'. Friends' data is never sent to any model.",

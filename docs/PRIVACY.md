@@ -115,10 +115,13 @@ Settings can download everything you have as a ZIP of CSV files (money as exact 
 as a formula is defused). Settings can also delete your account: it needs your password and your username, and it
 removes every row you own in every table and signs you out everywhere. For the owner this includes the chat's own tables:
 the things Rectifi was asked to remember and every saved chat thread, also threads that no longer show in the chat list.
-(The owner can delete the account only after every friend account is gone, so those tables hold nobody else's rows.)
-Old backups keep your encrypted text for up to 7 days (the backup days on the live page). Amounts and dates in those backups
-are readable, like any plain data. Rows deleted from the database can also stay as dead rows and in the write-ahead log
-until Postgres vacuums and recycles them.
+(Friends cannot use the AI, so those tables hold only the owner's data. The owner can also delete the account only after
+every friend account is gone.) The delete is one step: it revokes the owner's sessions first, stops any chat answer that is
+still running, and clears what that answer wrote.
+Old backups keep your data for up to 7 days (the backup days on the live page). Sealed text stays sealed there, but amounts
+and dates are readable, like any plain data. For the owner, the chat, charts, library, traces and memories are not sealed in
+this phase, so a backup keeps them readable for up to 7 days. Rows deleted from the database can also stay as dead rows and
+in the write-ahead log until Postgres vacuums and recycles them.
 
 ## What this does not cover
 
