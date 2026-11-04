@@ -122,7 +122,11 @@ def tenant_counts(uid: int) -> dict:
 
 
 def delete(ctx, name: str) -> None:
-    assert account.delete_account(ctx.uid, name, PASSWORD, name) == {"ok": True}
+    """A friend deletes themselves; the owner is reset on the server (Rectifi stopped), as `dev.py reset-owner` does."""
+    if ctx.uid == userctx.OWNER_UID:
+        assert account.reset_owner()
+    else:
+        assert account.delete_account(ctx.uid, name, PASSWORD, name) == {"ok": True}
 
 
 def public_tables() -> list[str]:
@@ -267,40 +271,8 @@ def test_the_sessions_are_revoked_before_the_wipe_and_an_old_cookie_is_refused_a
     assert_owner_has_nothing_left()
 
 
-def test_a_turn_that_writes_while_it_is_being_stopped_leaves_nothing_behind():
-    owner = sign_up("owner-person", kind="owner")
-    seed_owner(owner)
-    calls = []
-
-    def drain():                                       # what a running Ask turn does: finish its step and write one more thread
-        calls.append(1)
-        late = make_thread()
-        with as_user(1), db.connect() as conn:
-            conn.execute("INSERT INTO conversations (thread_id, title) VALUES (%s, 'late')", (late,))
-            conn.execute("INSERT INTO trace_spans (run_id, root_run_id, name, run_type, started_at) "
-                         "VALUES (gen_random_uuid(), gen_random_uuid(), 'late', 'chain', now())")
-        mem.add_memory(get_memory().store, "owner", "fact", "late memory")
-
-    assert account.delete_account(1, "owner-person", PASSWORD, "owner-person", drain=drain) == {"ok": True}
-    assert calls == [1]
-    assert_owner_has_nothing_left()
-    with db.connect_system("test: still unclaimed") as conn:
-        assert conn.execute("SELECT verifier IS NULL AS u FROM users WHERE id = 1").fetchone()["u"] is True
 
 
-def test_the_straggler_sweep_never_touches_a_new_owners_data():
-    owner = sign_up("owner-person", kind="owner")
-    seed_owner(owner)
-
-    def drain():                                       # someone claims row 1 again before the sweep runs
-        with db.connect_system("test: claim") as conn:
-            conn.execute("UPDATE users SET verifier = '\\x01'::bytea WHERE id = 1")
-        with as_user(1), db.connect() as conn:
-            conn.execute("INSERT INTO app_settings (key, value) VALUES ('new_owner', 'true'::jsonb)")
-
-    account.delete_account(1, "owner-person", PASSWORD, "owner-person", drain=drain)
-    with as_user(1), db.connect() as conn:
-        assert conn.execute("SELECT count(*) AS n FROM app_settings WHERE key = 'new_owner'").fetchone()["n"] == 1
 
 
 def test_a_sign_up_cannot_slip_in_between_the_friend_check_and_the_wipe(monkeypatch):
@@ -370,25 +342,6 @@ def test_a_failed_reset_leaves_the_claimed_account_with_all_its_data(monkeypatch
         assert conn.execute("SELECT count(*) AS n FROM user_sessions WHERE user_id = 1 AND NOT pending").fetchone()["n"] >= 1
 
 
-def test_drain_turns_cancels_a_running_turn_and_waits_for_it():
-    from rectifi.api import ask
-
-    key = "11111111-1111-1111-1111-111111111111"
-    turn = ask.turn_for(key)
-    assert turn.lock.acquire(blocking=False)
-    finished = []
-
-    def worker():
-        turn.cancelled.wait(5)
-        time.sleep(0.2)
-        finished.append(True)
-        turn.lock.release()
-
-    threading.Thread(target=worker).start()
-    ask.drain_turns(timeout=10)
-    assert finished == [True] and turn.cancelled.is_set() and not turn.lock.locked()
-    ask._turns.pop(key, None)                                                     # noqa: SLF001
-    ask.drain_turns(timeout=0.1)                                                  # nothing running: returns at once
 
 
 # ───────────── round 2: a late write is never inherited by the next owner ─────────────
@@ -457,7 +410,7 @@ def test_a_stop_that_arrives_while_a_turn_is_preparing_is_still_there_when_the_w
     seen, done = {}, threading.Event()
 
     def prepare():
-        ask.drain_turns(timeout=0.1)                   # what the account delete does while this turn prepares (it holds the lock)
+        ask.turn_for(key).cancelled.set()              # a stop that arrives while this turn prepares (it holds the lock)
         return object()
 
     def work(graph, emit, turn):
@@ -475,47 +428,8 @@ def test_a_stop_that_arrives_while_a_turn_is_preparing_is_still_there_when_the_w
         ask._turns.pop(key, None)                                                     # noqa: SLF001
 
 
-def test_drain_runs_stops_a_running_chart_and_waits_for_it():
-    from rectifi.api.routes import charts
-
-    charts.reset()
-    assert charts._busy.acquire(blocking=False)                                       # noqa: SLF001
-    finished = []
-
-    def run():
-        charts._stop.wait(5)                                                          # noqa: SLF001
-        time.sleep(0.2)
-        finished.append(True)
-        charts._busy.release()                                                        # noqa: SLF001
-
-    threading.Thread(target=run).start()
-    charts.drain_runs(timeout=10)
-    assert finished == [True] and not charts._busy.locked()                           # noqa: SLF001
-    charts.reset()
 
 
-def test_a_drain_that_times_out_is_logged_without_ids_or_text(caplog):
-    import logging
-
-    from rectifi.api import ask
-    from rectifi.api.routes import charts
-
-    key = "33333333-3333-3333-3333-333333333333"
-    turn = ask.turn_for(key)
-    assert turn.lock.acquire(blocking=False)
-    charts.reset()
-    assert charts._busy.acquire(blocking=False)                                       # noqa: SLF001
-    try:
-        with caplog.at_level(logging.WARNING):
-            ask.drain_turns(timeout=0.05)
-            charts.drain_runs(timeout=0.05)
-        lines = [r.getMessage() for r in caplog.records if r.name.startswith("rectifi.api")]
-        assert any("chat turn" in m for m in lines) and any("chart run" in m for m in lines)
-        assert not any(key in m for m in lines)
-    finally:
-        turn.lock.release()
-        ask._turns.pop(key, None)                                                     # noqa: SLF001
-        charts.reset()
 
 
 def test_tenant_scope_lets_the_real_error_through_instead_of_hiding_it_in_a_failed_transaction():
@@ -525,3 +439,51 @@ def test_tenant_scope_lets_the_real_error_through_instead_of_hiding_it_in_a_fail
         with pytest.raises(psycopg.errors.DivisionByZero):                            # not InFailedSqlTransaction
             with db.tenant_scope(conn, userctx.UserContext(uid=1, strict=False)):
                 conn.execute("SELECT 1/0")
+
+
+# ───────────── fallback: the owner is deleted on the server only ─────────────
+
+def test_the_owner_gets_403_on_the_delete_route_and_a_friend_can_still_delete_themselves():
+    owner = sign_up("owner-person", kind="owner")
+    friend = sign_up("friend-person")
+    seed_owner(owner)
+    populate(friend, "fr")
+    owner_before, library_before = tenant_counts(1), library_counts()
+    r = CLIENTS["owner-person"].request("DELETE", "/api/account", json={"password": PASSWORD, "confirm_username": "owner-person"})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "owner_delete_on_server"
+    assert "python scripts/dev.py reset-owner" in r.json()["error"]["message"]
+    assert tenant_counts(1) == owner_before and library_counts() == library_before
+    with pytest.raises(users.AuthError) as direct:                                     # the function itself says the same
+        account.delete_account(1, "owner-person", PASSWORD, "owner-person")
+    assert direct.value.status == 403
+
+    r = CLIENTS["friend-person"].request("DELETE", "/api/account", json={"password": PASSWORD, "confirm_username": "friend-person"})
+    assert r.status_code == 200
+    assert all(n == 0 for n in tenant_counts(friend.uid).values())
+    assert tenant_counts(1) == owner_before and library_counts() == library_before
+
+
+def test_a_sweep_that_is_still_running_cannot_erase_the_deleted_mark_or_seal_for_a_gone_owner():
+    from rectifi import seal_sweep
+
+    owner = sign_up("owner-person", kind="owner")
+    with db.connect_system("test: unseal") as conn:
+        conn.execute("UPDATE users SET encrypted = false, sweep_state = 'pending' WHERE id = 1")
+    populate(owner)
+    seen = []
+
+    def reset_in_the_middle(table, changed):
+        if not seen:
+            seen.append(table)
+            account.reset_owner()                      # the owner is reset while the sweep is between two batches
+
+    result = seal_sweep.run(owner, batch=1, on_batch=reset_in_the_middle)
+    assert seen and result["finished"] is False
+    with db.connect_system("test: the mark") as conn:
+        row = conn.execute("SELECT sweep_state, encrypted FROM users WHERE id = 1").fetchone()
+    assert dict(row) == {"sweep_state": "deleted", "encrypted": False}
+    assert seal_sweep.should_run(1) is False
+    assert account.set_sweep_state(1, "pending", owner.public_key) is False
+    assert account.finish_sweep(1, owner.public_key) is False
+    with db.connect_system("test: still deleted") as conn:
+        assert conn.execute("SELECT sweep_state FROM users WHERE id = 1").fetchone()["sweep_state"] == "deleted"

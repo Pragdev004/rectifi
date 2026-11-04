@@ -10,8 +10,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ... import account, config, users
-from .. import ask, auth
-from . import charts
+from .. import auth
 from ..errors import error_response
 from ..inputs import api
 
@@ -24,25 +23,22 @@ def export(request):
                     headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
 
 
-def _drain() -> None:
-    """Chat turns and chart runs that were still going when the owner deleted the account: stop them and wait a while."""
-    ask.drain_turns(10.0)
-    charts.drain_runs(10.0)
-
-
 @api(body=True)
 def delete(request, data):
-    """Needs the password and the typed username. Deletes every row the person owns and ends their sessions."""
+    """A friend's own delete: needs the password and the typed username, deletes every row they own and ends their sessions.
+    The owner gets 403: the owner account is deleted on the server with `dev.py reset-owner`."""
     who = getattr(request.state, "signed_in", None)
     if who is None:
         return error_response(401, "auth_required", auth.MESSAGES["auth_required"])
+    if who.uid == account.OWNER_UID:                  # before anything is read or checked: nothing is deleted, no password is counted
+        return error_response(403, "owner_delete_on_server", account.OWNER_DELETE_MESSAGE)
     password, confirm = data.get("password"), data.get("confirm_username")
     if not isinstance(password, str) or not password or len(password) > users.MAX_PASSWORD_LENGTH:
         return error_response(422, "invalid", "Type your password.", "password")
     if not isinstance(confirm, str) or not confirm.strip() or len(confirm) > 100:
         return error_response(422, "invalid", "Type your username to confirm.", "confirm_username")
     try:
-        account.delete_account(who.uid, who.username, password, confirm, drain=_drain)
+        account.delete_account(who.uid, who.username, password, confirm)
     except users.AuthError as exc:
         headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
         return error_response(exc.status, exc.code, exc.message, exc.field, headers=headers)

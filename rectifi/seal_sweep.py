@@ -390,6 +390,8 @@ def should_run(uid: int) -> bool:
     if uid != OWNER_UID or not config.multiuser():
         return False
     state, encrypted = account.sweep_state(uid)
+    if state == account.DELETED_MARK:                  # the owner account was reset: nobody to seal for until a new claim
+        return False
     return not encrypted and parse_state(state)["phase"] != "done"
 
 
@@ -437,7 +439,9 @@ def run(ctx: userctx.UserContext, *, batch: int = BATCH, max_batches: int | None
                         break                                  # no id to page by and nothing moved: stop, never spin
                     done += changed
                     batches += 1
-                    account.set_sweep_state(ctx.uid, json.dumps({"stage": table, "done": done, "total": total}))
+                    if not account.set_sweep_state(ctx.uid, json.dumps({"stage": table, "done": done, "total": total}), ctx.public_key):
+                        log.warning("sweep: the account it was sealing is gone (deleted or claimed again); stopped")
+                        return {"finished": False, "sealed": done, "busy": False, "merged": merged, "skipped": "the account was deleted"}
                     if on_batch:
                         on_batch(table, changed)
                     if max_batches is not None and batches >= max_batches:
@@ -447,7 +451,9 @@ def run(ctx: userctx.UserContext, *, batch: int = BATCH, max_batches: int | None
             if remaining() != 0:                               # never switch the database guard on over plain text
                 log.warning("sweep: some rows still hold plain text; encryption is not switched on yet")
                 return {"finished": False, "sealed": done, "busy": False, "merged": merged}
-            account.finish_sweep(ctx.uid)
+            if not account.finish_sweep(ctx.uid, ctx.public_key):
+                log.warning("sweep: the account it was sealing is gone (deleted or claimed again); stopped")
+                return {"finished": False, "sealed": done, "busy": False, "merged": merged, "skipped": "the account was deleted"}
         log.info("sweep finished: %s rows sealed, %s duplicate rows merged", done, merged)
         return {"finished": True, "sealed": done, "busy": False, "merged": merged}
     finally:

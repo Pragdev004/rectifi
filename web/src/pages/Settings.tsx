@@ -116,7 +116,18 @@ function Export() {
   );
 }
 
-function DeleteAccount({ username, isOwner }: { username: string; isOwner: boolean }) {
+const OWNER_DELETE = "The owner account can only be deleted on the server: stop Rectifi, then run python scripts/dev.py reset-owner.";
+
+function OwnerDelete() {
+  return (
+    <Panel id="del-h" title="Delete my account">
+      <p data-testid="owner-delete-note">{OWNER_DELETE}</p>
+      <p>Backups can keep copies for a few days. Your chat, memories, charts, library and traces are not sealed, so a backup keeps them readable.</p>
+    </Panel>
+  );
+}
+
+function DeleteAccount({ username }: { username: string }) {
   const qc = useQueryClient();
   const [password, setPassword] = useState("");
   const [typed, setTyped] = useState("");
@@ -136,7 +147,6 @@ function DeleteAccount({ username, isOwner }: { username: string; isOwner: boole
     <Panel id="del-h" title="Delete my account" danger>
       <Callout tone="over" lead="This cannot be undone, and there is no reset.">
         Everything you own is deleted. Backups can keep copies for a few days: sealed text stays sealed, but amounts and dates are readable.
-        {isOwner && " Your chat, memories, charts, library and traces are not sealed, so a backup keeps them readable."}
       </Callout>
       <SecretForm className={s.form} problem={problem} fields={["password", "confirm_username"]} onSubmit={submit}>
         <PasswordField label="Your password" name="current-password" autoComplete="current-password" error={fieldProblem(problem, "password")}
@@ -171,7 +181,7 @@ export default function SettingsPage() {
           <ChangePassword />
           <NewCode username={data.username} />
           <Export />
-          <DeleteAccount username={data.username} isOwner={data.is_owner} />
+          {data.is_owner ? <OwnerDelete /> : <DeleteAccount username={data.username} />}
         </div>
       )}
     </>

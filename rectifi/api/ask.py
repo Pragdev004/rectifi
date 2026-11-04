@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 import threading
 import uuid
@@ -25,8 +24,6 @@ from .. import config, userctx
 from .errors import ApiError
 from . import wire
 from .wire import to_wire
-
-log = logging.getLogger("rectifi.api.ask")
 
 TICK_SECONDS = 5.0
 TEXT_MAX = 4000
@@ -370,27 +367,6 @@ def delete_chat(thread_id: str) -> bool:
     from .. import tools
 
     return tools.conversation_delete(thread_id)
-
-
-def drain_turns(timeout: float = 15.0) -> None:
-    """Stop every running chat turn and wait (up to `timeout` seconds in all) until each has let go of its lock. Used when the
-    owner deletes the account, so no turn writes a checkpoint after the wipe. A turn that does not stop in time is logged (a
-    count only: no id, no text); the next owner claim wipes whatever it writes later (users.confirm_signup)."""
-    import time
-
-    with _turns_guard:
-        running = list(_turns.values())
-    for turn in running:
-        turn.cancelled.set()
-    deadline = time.monotonic() + timeout
-    stuck = 0
-    for turn in running:
-        if turn.lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
-            turn.lock.release()
-        else:
-            stuck += 1
-    if stuck:
-        log.warning("account delete: %d chat turn(s) were still running after %.0f s", stuck, timeout)
 
 
 def request_stop(thread_id: str) -> bool:
