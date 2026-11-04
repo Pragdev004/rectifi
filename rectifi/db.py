@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -33,6 +35,36 @@ class TenancyMigrationNeeded(RuntimeError):
 
 class UnsafeDatabaseRole(RuntimeError):
     """The app logs in as a superuser or a role with BYPASSRLS, so row level security would be skipped silently."""
+
+
+class UnsafeTestDatabase(RuntimeError):
+    """A test tried to reach a database that is not a scratch one. Raised before any connection is opened."""
+
+
+TEST_SAFE_SUFFIXES = ("_test", "_demo")     # while pytest runs, only these databases may be opened
+
+
+def _under_pytest() -> bool:
+    return "pytest" in sys.modules or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def guard_target(url: str) -> str:
+    """Every connection in this process goes through here first (the pool, connect, connect_system, the chat memory pool,
+    raw_connect). While pytest runs, a database whose name does not end in _test or _demo is refused before anything is
+    opened, so no test can ever touch real data, whatever it patches or undoes. Outside tests it only returns the URL."""
+    if _under_pytest():
+        try:
+            name = conninfo_to_dict(url).get("dbname") or ""
+        except psycopg.ProgrammingError:
+            name = ""
+        if not name.endswith(TEST_SAFE_SUFFIXES):
+            raise UnsafeTestDatabase(f"Refusing to open the database {name!r} while tests run: only *_test or *_demo databases.")
+    return url
+
+
+def raw_connect(url: str | None = None, **kwargs) -> psycopg.Connection:
+    """A plain psycopg connection (no pool, no person), checked by guard_target first. The only psycopg.connect in rectifi/."""
+    return psycopg.connect(guard_target(url or config.database_url()), **kwargs)
 
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
@@ -115,7 +147,7 @@ def describe_target(url: str) -> str:
 def get_pool() -> ConnectionPool:
     """One shared pool. Fails fast (about 5 seconds) with DatabaseUnavailable if Postgres isn't there."""
     global _pool, _pool_url
-    url = config.database_url()
+    url = guard_target(config.database_url())       # checked on every connect(), so a cached pool can't outlive a URL change
     if _pool is None or _pool_url != url:
         if _pool is not None:
             _pool.close()

@@ -200,12 +200,11 @@ GATEWAY_DEFAULT_PORT = 8765
 RESET_INFO_SNIPPET = """
 import json, sys
 try:
-    import psycopg
     from psycopg.rows import dict_row
     from rectifi import account, config, db, userctx
     if not config.multiuser():
         print(json.dumps({"error": "Rectifi is not in multi-user mode (RECTIFI_MULTIUSER), so there is no owner account to delete."})); sys.exit(0)
-    with psycopg.connect(config.database_url(), autocommit=True, row_factory=dict_row) as raw:
+    with db.raw_connect(autocommit=True, row_factory=dict_row) as raw:
         others = account.other_connections(raw)           # before this process opens its own pool
     with db.connect_system("reset-owner: read the owner") as conn:
         row = conn.execute("SELECT username FROM users WHERE id = 1").fetchone()
@@ -221,10 +220,9 @@ print(json.dumps({"target": db.describe_target(config.database_url()), "others":
 RESET_SNIPPET = """
 import json, sys
 try:
-    import psycopg
     from psycopg.rows import dict_row
-    from rectifi import account, config, users
-    with psycopg.connect(config.database_url(), autocommit=True, row_factory=dict_row) as raw:
+    from rectifi import account, config, db, users
+    with db.raw_connect(autocommit=True, row_factory=dict_row) as raw:
         others = account.other_connections(raw)           # checked again, right before the delete
     if others:
         print(json.dumps({"others": others})); sys.exit(0)

@@ -19,7 +19,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from .. import config
-from ..db import DatabaseUnavailable, describe_target
+from ..db import DatabaseUnavailable, describe_target, guard_target
 
 POOL_MAX = 6
 
@@ -38,7 +38,7 @@ _memory_url: str | None = None
 def get_memory() -> Memory:
     """The shared saver + store. Rebuilt if DATABASE_URL changed. Raises DatabaseUnavailable if Postgres is not there."""
     global _memory, _memory_url
-    url = config.database_url()
+    url = guard_target(config.database_url())       # before the cached saver is handed out or a pool is opened
     with _lock:
         if _memory is not None and _memory_url == url:
             return _memory

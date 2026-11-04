@@ -67,7 +67,7 @@ def test_overview_with_spending_renders():
 
 
 def test_database_down_shows_message_quickly(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "postgresql://rectifi:topsecretpw@127.0.0.1:9/nodb")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://rectifi:topsecretpw@127.0.0.1:9/nodb_test")
     started = time.monotonic()
     at = run_app(timeout=20)
     assert time.monotonic() - started < 15

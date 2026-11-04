@@ -119,7 +119,7 @@ python scripts/dev.py free-models   # OpenRouter :free models that support tools
 powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1   # Windows, PostgreSQL already installed
 ```
 
-Tests need Postgres with a database whose name ends in `_test` (default `rectifi_test`). Each test drops all tables. `conftest.py` refuses to run on any other name. There is no API key and no Ollama in tests: the agent is driven by `ScriptedModel` in `tests/test_agent.py`.
+Tests need Postgres with a database whose name ends in `_test` (default `rectifi_test`). Each test drops all tables. `conftest.py` refuses to run on any other name, and while pytest runs `db.guard_target` refuses every connection (pool, `connect`, `connect_system`, `raw_connect`, chat memory) to a database not named `*_test` or `*_demo` (`tests/test_db_guard.py`). Never call a bare `monkeypatch.undo()`: use `monkeypatch.context()`. There is no API key and no Ollama in tests: the agent is driven by `ScriptedModel` in `tests/test_agent.py`.
 
 ## Conventions
 

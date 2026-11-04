@@ -374,7 +374,7 @@ def test_privacy_holds_no_user_data_and_needs_no_database(monkeypatch):
     add_ledger(ctx, "CANARY")
     body = new_client().get("/api/privacy").text
     assert "CANARY" not in body and "alice" not in body
-    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/none")      # unreachable: still answers
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/none_test")      # unreachable: still answers
     db.close_pool()
     assert new_client().get("/api/privacy").status_code == 200
 
