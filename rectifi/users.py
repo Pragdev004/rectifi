@@ -54,7 +54,9 @@ TOUCH_SECONDS = 5 * 60                  # last_seen_at is written at most this o
 # person out. So there is NO lock on the account. What exists instead:
 #   * per (account, client) pair: a pause after DELAY_AFTER misses, and a block of that pair only after LOCK_AFTER misses.
 #     "Client" is the browser's known-device id (a signed cookie from an earlier good sign-in) or else its network address.
-#   * per account, across all clients: a response delay that grows with the misses (never a refusal, and a known device skips it).
+#   * per account, across all clients: after ACCOUNT_FREE_MISSES misses a client without a known device is refused with 429 and
+#     Retry-After BEFORE any hashing until a backoff since the latest miss or admitted try has passed (round 3, N4; 2 s doubling to
+#     30 s). Parallel guesses from many addresses therefore run one hash per backoff. A known device and recovery skip it.
 #   * recovery counts in its own bucket, so password misses never block it (and the other way round).
 #   * globally: caps on password hashing in flight, in three lanes (round 3, N7): a known device with a valid signed cookie for that
 #     account (AUTH_DEVICE_INFLIGHT), a proven recovery (AUTH_RECOVERY_INFLIGHT) and everyone else (AUTH_INFLIGHT). The rest get 429 at
@@ -87,6 +89,7 @@ MESSAGES = {
     "invalid_recovery": "That username or recovery code isn't right.",
     "login_locked": "Too many tries. Wait 15 minutes.",
     "login_busy": "Rectifi is busy signing people in. Wait a moment and try again.",
+    "login_wait": "That username has had too many wrong tries just now. Wait a few seconds and try again.",
     "signup_limited": "Too many sign-up tries. Wait an hour.",
     "username_taken": "That username is taken.",
     "confirm_failed": "We couldn't finish setting up your account. Nothing was changed. Try again in a moment.",
@@ -250,25 +253,45 @@ class _Throttle:
             until = self._pairs.get(pair, ([], 0.0))[1]
             return max(1, int(until - now + 0.999)) if until > now else 0
 
-    def delay_for(self, pair: tuple, name: str, now: float, *, known_device: bool = False) -> float:
-        """How long to wait before answering: the pair's pause, or the account-wide delay (skipped for a known device)."""
+    def delay_for(self, pair: tuple, now: float) -> float:
+        """How long to wait before answering: the pair's own pause. (The account-wide backoff is applied BEFORE hashing, by reserve.)"""
         with self._lock:
             times = self._pairs.get(pair, ([], 0.0))[0]
-            pause = DELAY_SECONDS if sum(1 for t in times if now - t < DELAY_WINDOW) >= DELAY_AFTER else 0.0
-            extra = 0.0
-            if not known_device:
-                n = sum(1 for t in self._names.get(name, []) if now - t < LOCK_WINDOW)
-                if n > ACCOUNT_FREE_MISSES:
-                    extra = min(ACCOUNT_MAX_DELAY, float(2 ** min(n - ACCOUNT_FREE_MISSES, 10)))
-            return max(pause, extra)
+            return DELAY_SECONDS if sum(1 for t in times if now - t < DELAY_WINDOW) >= DELAY_AFTER else 0.0
 
-    def fail(self, pair: tuple, name: str, now: float) -> bool:
-        """Record a miss. True when it blocked this pair."""
+    def reserve(self, name: str, now: float) -> int:
+        """For a client without a known device, BEFORE any hashing. 0: go ahead; the try is booked as a provisional miss, so parallel
+        tries count each other (release it if the password turns out right). Else: seconds to wait. The account's backoff after
+        ACCOUNT_FREE_MISSES misses (doubling to ACCOUNT_MAX_DELAY) runs from the latest miss or admitted try, so a flood of
+        guesses from many addresses is one hash per backoff, not one per address. Unknown names are treated the same."""
+        with self._lock:
+            times = [t for t in self._names.get(name, []) if now - t < LOCK_WINDOW]
+            n = len(times)
+            if n > ACCOUNT_FREE_MISSES:
+                wait = times[-1] + min(ACCOUNT_MAX_DELAY, float(2 ** min(n - ACCOUNT_FREE_MISSES, 10))) - now
+                if wait > 0:
+                    self._names[name] = times
+                    return max(1, int(wait + 0.999))
+            if len(self._names) >= THROTTLE_LIMIT and name not in self._names:
+                self._names.pop(next(iter(self._names)))
+            self._names[name] = times + [now]
+            return 0
+
+    def release(self, name: str, stamp: float) -> None:
+        """Take back a reserve() whose try did not end in a miss (right password, or refused as busy)."""
+        with self._lock:
+            times = self._names.get(name)
+            if times and stamp in times:
+                times.remove(stamp)
+
+    def fail(self, pair: tuple, name: str, now: float, *, reserved: bool = False) -> bool:
+        """Record a miss. True when it blocked this pair. `reserved`: reserve() already booked it against the account."""
         with self._lock:
             for table in (self._pairs, self._names):
                 if len(table) >= THROTTLE_LIMIT and (pair if table is self._pairs else name) not in table:
                     table.pop(next(iter(table)))
-            self._names[name] = [t for t in self._names.get(name, []) if now - t < LOCK_WINDOW] + [now]
+            if not reserved:
+                self._names[name] = [t for t in self._names.get(name, []) if now - t < LOCK_WINDOW] + [now]
             times, until = self._pairs.get(pair, ([], 0.0))
             times = [t for t in times if now - t < LOCK_WINDOW] + [now]
             if len(times) >= LOCK_AFTER:
@@ -630,7 +653,7 @@ def _client_pair(name: str, row, client: str, device: tuple[int, str] | None) ->
 def login(username: str, password: str, client: str = "", device: tuple[int, str] | None = None) -> Attempt:
     """Check a username and password. Unknown names, unconfirmed people and wrong passwords all cost one scrypt and get
     the same message. Misses are counted per (account, client), never per account alone: a stranger who guesses a name
-    blocks only his own pair, and slows (never refuses) the account's other new clients. See the limiter notes at the top.
+    blocks only his own pair, and makes the account's other NEW clients wait (a 429 with Retry-After, before any hashing). See the notes at the top.
     `client` is the network address; `device` is (uid, id) from a verified known-device cookie, or None."""
     now = _now()
     purge_unconfirmed(now)
@@ -643,20 +666,30 @@ def login(username: str, password: str, client: str = "", device: tuple[int, str
     blocked = login_throttle.blocked_for(pair, now)
     if blocked:
         return Attempt("locked", retry_after=blocked)
-    delay = login_throttle.delay_for(pair, name, now, known_device=known)
+    wait = 0 if known else login_throttle.reserve(name, now)          # before any hashing: a known device is never held back
+    if wait:
+        raise AuthError(429, "login_wait", MESSAGES["login_wait"], retry_after=wait)
+    delay = login_throttle.delay_for(pair, now)
+    missed = False
 
     def miss() -> Attempt:
-        if login_throttle.fail(pair, name, now):
+        nonlocal missed
+        missed = True
+        if login_throttle.fail(pair, name, now, reserved=not known):
             return Attempt("locked", retry_after=LOCK_SECONDS)
         return Attempt("invalid", delay=delay)
 
-    lane = "device" if known else "other"                  # `known` is true only for a verified cookie of THIS account
-    if not _can_sign_in(row):
-        _burn_scrypt(password if isinstance(password, str) else "", lane)
-        return miss()
-    dek = _check_password(row, password, lane)
-    if dek is None:
-        return miss()
+    try:
+        lane = "device" if known else "other"                  # `known` is true only for a verified cookie of THIS account
+        if not _can_sign_in(row):
+            _burn_scrypt(password if isinstance(password, str) else "", lane)
+            return miss()
+        dek = _check_password(row, password, lane)
+        if dek is None:
+            return miss()
+    finally:
+        if not known and not missed:
+            login_throttle.release(name, now)                  # right password, or refused as busy: not a miss
     login_throttle.clear(pair)
     with db.connect_system("users: open a session") as conn:
         signed_in = _open_session_row(conn, row["id"], dek, now)

@@ -48,6 +48,14 @@ def multiuser(monkeypatch):
     users.reset_limiters()
 
 
+def miss(*args):
+    """A wrong try; once the account backoff is on, the try is refused (429) instead of counted."""
+    try:
+        return users.login(*args)
+    except users.AuthError:
+        return None
+
+
 def make_account(name="alice"):
     token, recovery = users.signup(users.create_invite("friend")["code"], name, PASSWORD)
     users.confirm_signup(token)
@@ -112,9 +120,11 @@ def test_a_known_device_is_not_slowed_by_an_account_wide_backlog():
     make_account()
     uid = users.login("alice", PASSWORD, PROXY).signed_in.uid
     for i in range(users.ACCOUNT_FREE_MISSES + 6):
-        users.login("alice", WRONG, f"10.0.0.{i}")
+        miss("alice", WRONG, f"10.0.0.{i}")
     assert users.login("alice", PASSWORD, PROXY, device=(uid, "abcd1234")).delay == 0
-    assert users.login("alice", PASSWORD, PROXY).delay > 0                                # a new browser is slowed, never refused
+    with pytest.raises(users.AuthError) as err:                                           # a new browser waits (429 before any hash)
+        users.login("alice", PASSWORD, PROXY)
+    assert err.value.status == 429 and err.value.retry_after > 0
 
 
 # ------------------------- P3: no global refusal -------------------------
@@ -161,8 +171,10 @@ def test_brute_force_is_still_blocked_per_account_and_client_pair():
     assert users.login("alice", PASSWORD, "7.7.7.7").status == "locked"                   # even the right password: that pair is blocked
     assert users.login("alice", PASSWORD, "8.8.8.8").status == "ok"
     for _ in range(users.LOCK_AFTER):                                                     # unknown clients also meet the account backoff
-        users.login("alice", WRONG, "6.6.6.6")
-    assert users.login("alice", WRONG, "5.5.5.5").delay > 0
+        miss("alice", WRONG, "6.6.6.6")
+    with pytest.raises(users.AuthError) as err:
+        users.login("alice", WRONG, "5.5.5.5")
+    assert err.value.status == 429
 
 
 # ------------------------- the trusted proxy rule -------------------------

@@ -32,6 +32,14 @@ def multiuser(monkeypatch):
     users.reset_limiters()
 
 
+def miss(*args):
+    """A wrong try; once the account backoff is on, the try is refused (429) instead of counted."""
+    try:
+        return users.login(*args)
+    except users.AuthError:
+        return None
+
+
 def make_account(name="alice"):
     token, recovery = users.signup(users.create_invite("friend")["code"], name, PASSWORD)
     users.confirm_signup(token)
@@ -51,14 +59,15 @@ def test_a_stranger_who_guesses_the_name_blocks_only_his_own_client():
     assert real.status == "ok"
 
 
-def test_the_account_is_never_locked_however_many_clients_miss():
+def test_the_account_is_never_locked_however_many_clients_miss(monkeypatch):
     make_account()
     for i in range(users.ACCOUNT_FREE_MISSES + 4):
-        users.login("alice", WRONG, f"10.0.0.{i}")                                # a spread-out guesser
-    ok = users.login("alice", PASSWORD, "2.2.2.2")
-    assert ok.status == "ok"                                                      # slower, never refused
-    assert ok.delay > 0                                                           # the account-wide delay grew
-    assert ok.delay <= users.ACCOUNT_MAX_DELAY
+        miss("alice", WRONG, f"10.0.0.{i}")                                # a spread-out guesser
+    with pytest.raises(users.AuthError) as err:                                   # a new client waits (round 3, N4: before any hash) ...
+        users.login("alice", PASSWORD, "2.2.2.2")
+    assert err.value.status == 429 and 0 < err.value.retry_after <= users.ACCOUNT_MAX_DELAY
+    monkeypatch.setattr(users, "_now", lambda: time.time() + users.ACCOUNT_MAX_DELAY + 1)
+    assert users.login("alice", PASSWORD, "2.2.2.2").status == "ok"               # ... and then signs in: the account is never locked
 
 
 def test_a_known_device_skips_the_account_delay_and_a_shared_address(monkeypatch):
@@ -69,9 +78,11 @@ def test_a_known_device_skips_the_account_delay_and_a_shared_address(monkeypatch
     known = users.login("alice", PASSWORD, "proxy", device=(uid, "abcd1234"))     # a browser the person signed in with before
     assert known.status == "ok" and known.delay == 0
     for i in range(users.ACCOUNT_FREE_MISSES + 4):
-        users.login("alice", WRONG, f"10.0.0.{i}")
+        miss("alice", WRONG, f"10.0.0.{i}")
     assert users.login("alice", PASSWORD, "elsewhere", device=(uid, "abcd1234")).delay == 0
-    assert users.login("alice", PASSWORD, "elsewhere", device=(uid + 1, "abcd1234")).delay > 0   # another account's cookie proves nothing
+    with pytest.raises(users.AuthError) as err:                                   # another account's cookie proves nothing
+        users.login("alice", PASSWORD, "elsewhere", device=(uid + 1, "abcd1234"))
+    assert err.value.status == 429
 
 
 def test_a_failed_password_never_blocks_recovery_and_the_reverse():
