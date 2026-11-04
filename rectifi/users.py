@@ -56,8 +56,10 @@ TOUCH_SECONDS = 5 * 60                  # last_seen_at is written at most this o
 #     "Client" is the browser's known-device id (a signed cookie from an earlier good sign-in) or else its network address.
 #   * per account, across all clients: a response delay that grows with the misses (never a refusal, and a known device skips it).
 #   * recovery counts in its own bucket, so password misses never block it (and the other way round).
-#   * globally: ONE cap, on password hashing in flight (AUTH_INFLIGHT; the rest get 429 at once). There is no budget of misses that
-#     refuses new clients: a stranger's junk must never keep real people out (round 2, N2).
+#   * globally: caps on password hashing in flight, in three lanes (round 3, N7): a known device with a valid signed cookie for that
+#     account (AUTH_DEVICE_INFLIGHT), a proven recovery (AUTH_RECOVERY_INFLIGHT) and everyone else (AUTH_INFLIGHT). The rest get 429 at
+#     once. A stranger's junk can only fill the "other" lane. The three caps together bound the threadpool threads busy hashing.
+#     There is no budget of misses that refuses new clients: a stranger's junk must never keep real people out (round 2, N2).
 #   * every good sign-in, sign-up confirm and recovery sets the signed device cookie (api/routes/auth.py), so a person who is
 #     behind the same proxy address as a stranger is a known device and is never refused or delayed for the stranger's misses.
 #   * `client` is the real client address only when RECTIFI_TRUSTED_PROXIES vouches for the proxy (api/auth.client_address).
@@ -71,7 +73,9 @@ LOCK_WINDOW = 15 * 60
 LOCK_SECONDS = 15 * 60
 ACCOUNT_FREE_MISSES = 10                # misses on one account (all clients, LOCK_WINDOW) before the account-wide delay starts
 ACCOUNT_MAX_DELAY = 30.0                # that delay doubles per miss up to this many seconds
-AUTH_INFLIGHT = 4                       # password hashes running or waiting at once (vault runs 2); more are refused with 429 at once
+AUTH_INFLIGHT = 4                       # hashes in flight in the "other" lane (strangers, unknown names, sign-up); more get 429 at once
+AUTH_DEVICE_INFLIGHT = 2                # the known-device lane: needs a valid signed device cookie for that account (checked before hashing)
+AUTH_RECOVERY_INFLIGHT = 1              # the recovery lane: used only after the recovery code was proven
 SIGNUP_LIMIT = 10                       # sign-up attempts, from anyone, per SIGNUP_WINDOW (global: every request is from 127.0.0.1)
 SIGNUP_WINDOW = 3600
 THROTTLE_LIMIT = 10_000                 # (account, client) pairs remembered by the limiter, so memory stays bounded
@@ -336,36 +340,41 @@ def _can_sign_in(row) -> bool:
     return row is not None and row["confirmed"] and row["verifier"] is not None and row["dek_by_password"] is not None
 
 
-_AUTH_SLOTS = threading.BoundedSemaphore(AUTH_INFLIGHT)
+_LANES = {"device": AUTH_DEVICE_INFLIGHT, "recovery": AUTH_RECOVERY_INFLIGHT, "other": AUTH_INFLIGHT}
+_AUTH_SLOTS = threading.BoundedSemaphore(AUTH_INFLIGHT)                       # the "other" lane (kept under this name for the tests)
+_LANE_SLOTS = {"device": threading.BoundedSemaphore(AUTH_DEVICE_INFLIGHT), "recovery": threading.BoundedSemaphore(AUTH_RECOVERY_INFLIGHT),
+               "other": _AUTH_SLOTS}
 
 
-def _derive(password: str, salt: bytes) -> tuple[bytes, bytes]:
-    """scrypt, behind a cap on how many hashes run or wait at once. A flood of sign-ins gets 429 at once instead of holding
-    threadpool threads (the session check needs them): at most AUTH_INFLIGHT threads are ever busy here."""
-    if not _AUTH_SLOTS.acquire(blocking=False):
+def _derive(password: str, salt: bytes, lane: str = "other") -> tuple[bytes, bytes]:
+    """scrypt, behind a cap on how many hashes run or wait at once, per lane. A flood of sign-ins gets 429 at once instead of
+    holding threadpool threads (the session check needs them): at most sum(_LANES) threads are ever busy here. The caller picks
+    "device" only for a verified device cookie of that account and "recovery" only after the code was proven."""
+    slots = _LANE_SLOTS[lane]
+    if not slots.acquire(blocking=False):
         raise AuthError(429, "login_busy", MESSAGES["login_busy"], retry_after=2)
     try:
         return vault.derive_password_keys(password, salt)
     finally:
-        _AUTH_SLOTS.release()
+        slots.release()
 
 
-def _burn_scrypt(password: str) -> None:
+def _burn_scrypt(password: str, lane: str = "other") -> None:
     """The same work as checking a real password, so an unknown username takes as long as a wrong password."""
     try:
-        _derive(password[:MAX_PASSWORD_LENGTH], _DUMMY_SALT)
+        _derive(password[:MAX_PASSWORD_LENGTH], _DUMMY_SALT, lane)
     except AuthError:
         raise                                           # busy: the caller answers 429
     except Exception:                                   # noqa: BLE001  (timing only)
         pass
 
 
-def _check_password(row, password: str) -> bytes | None:
+def _check_password(row, password: str, lane: str = "other") -> bytes | None:
     """The data key if `password` is right for this user, else None. One scrypt either way."""
     if not isinstance(password, str) or len(password) > MAX_PASSWORD_LENGTH or not password:
-        _burn_scrypt("x")
+        _burn_scrypt("x", lane)
         return None
-    verifier, kek = _derive(password, bytes(row["scrypt_salt"]))
+    verifier, kek = _derive(password, bytes(row["scrypt_salt"]), lane)
     if not vault.verifier_matches(verifier, bytes(row["verifier"])):
         return None
     try:
@@ -641,10 +650,11 @@ def login(username: str, password: str, client: str = "", device: tuple[int, str
             return Attempt("locked", retry_after=LOCK_SECONDS)
         return Attempt("invalid", delay=delay)
 
+    lane = "device" if known else "other"                  # `known` is true only for a verified cookie of THIS account
     if not _can_sign_in(row):
-        _burn_scrypt(password if isinstance(password, str) else "")
+        _burn_scrypt(password if isinstance(password, str) else "", lane)
         return miss()
-    dek = _check_password(row, password)
+    dek = _check_password(row, password, lane)
     if dek is None:
         return miss()
     login_throttle.clear(pair)
@@ -802,7 +812,7 @@ def recover(username: str, recovery_code: str, new_password: str, client: str = 
         raise bad
     recover_throttle.clear(pair)
     salt = secrets.token_bytes(16)
-    verifier, kek = _derive(new_password, salt)
+    verifier, kek = _derive(new_password, salt, "recovery")          # reached only with a proven recovery code
     code = vault.new_recovery_code()
     recovery_salt = secrets.token_bytes(16)
     with db.connect_system("users: recover an account") as conn:
