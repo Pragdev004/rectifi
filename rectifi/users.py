@@ -31,7 +31,7 @@ import secrets
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import psycopg
 
@@ -108,7 +108,7 @@ class SignedIn:
     username: str
     is_owner: bool
     sid: str
-    k: bytes
+    k: bytes = field(repr=False)             # the cookie secret: never in a repr, a log line or a traceback
     epoch: int
     ctx: userctx.UserContext
 
