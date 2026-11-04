@@ -487,3 +487,174 @@ def test_a_sweep_that_is_still_running_cannot_erase_the_deleted_mark_or_seal_for
     assert account.finish_sweep(1, owner.public_key) is False
     with db.connect_system("test: still deleted") as conn:
         assert conn.execute("SELECT sweep_state FROM users WHERE id = 1").fetchone()["sweep_state"] == "deleted"
+
+
+# ───────────── dev.py reset-owner ─────────────
+
+def load_devtool():
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("rectifi_devtool_users_reset", root / "scripts" / "devtools" / "users.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _Terminal:
+    def __init__(self, tty: bool) -> None:
+        self.tty = tty
+
+    def isatty(self) -> bool:
+        return self.tty
+
+
+def run_here(snippet: str, *argv: str) -> dict:
+    """What the child process would print, but run in this process (against the test database)."""
+    import contextlib
+    import io
+    import json
+    import sys
+
+    out = io.StringIO()
+    old_argv = sys.argv
+    sys.argv = ["-c", *argv]
+    try:
+        with contextlib.redirect_stdout(out):
+            try:
+                exec(snippet, {"__name__": "__main__"})                                # noqa: S102
+            except SystemExit:
+                pass
+    finally:
+        sys.argv = old_argv
+    data = json.loads(out.getvalue().strip().splitlines()[-1])
+    if "error" in data:
+        raise SystemExit(data["error"])
+    return data
+
+
+@pytest.fixture
+def tool(monkeypatch):
+    module = load_devtool()
+    monkeypatch.setattr(module, "listening", lambda port: False)
+    monkeypatch.setattr(module, "_child_json", run_here)
+    monkeypatch.setattr("sys.stdin", _Terminal(True))
+    return module
+
+
+def answers(monkeypatch, *typed):
+    queue = list(typed)
+    monkeypatch.setattr("builtins.input", lambda prompt="": queue.pop(0))
+    return queue
+
+
+def test_reset_owner_refuses_without_a_terminal_and_changes_nothing(tool, monkeypatch):
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    before = tenant_counts(1)
+    monkeypatch.setattr("sys.stdin", _Terminal(False))
+    with pytest.raises(SystemExit) as stop:
+        tool.reset_owner([])
+    assert "needs a terminal" in str(stop.value)
+    with pytest.raises(SystemExit):
+        tool.reset_owner(["--yes"])
+    assert tenant_counts(1) == before and library_counts()["store"] >= 1
+
+
+@pytest.mark.parametrize("busy, label", [(8501, "web app"), (8765, "phone gateway")])
+def test_reset_owner_refuses_while_the_app_or_the_gateway_is_listening(tool, monkeypatch, busy, label):
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    before = tenant_counts(1)
+    monkeypatch.setattr(tool, "listening", lambda port: port == busy)
+    monkeypatch.setattr(tool, "_child_json", lambda *a: pytest.fail("the database must not be touched while something is running"))
+    with pytest.raises(SystemExit) as stop:
+        tool.reset_owner([])
+    assert label in str(stop.value) and str(busy) in str(stop.value) and "Nothing was changed" in str(stop.value)
+    assert tenant_counts(1) == before
+
+
+def test_reset_owner_refuses_while_another_database_connection_is_open(tool, monkeypatch):
+    import psycopg
+
+    from rectifi import config
+
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    before, library = tenant_counts(1), library_counts()
+    answers(monkeypatch, "owner-person", "delete")
+    with psycopg.connect(config.database_url()):                  # the app, psql or a backup: anything else on this database
+        with pytest.raises(SystemExit) as stop:
+            tool.reset_owner([])
+    assert "other connection" in str(stop.value) and "Nothing was changed" in str(stop.value)
+    assert tenant_counts(1) == before and library_counts() == library
+
+
+def test_other_connections_counts_a_second_session_and_not_its_own():
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from rectifi import config
+
+    with psycopg.connect(config.database_url(), autocommit=True, row_factory=dict_row) as one:
+        base = account.other_connections(one)
+        with psycopg.connect(config.database_url(), autocommit=True):
+            assert account.other_connections(one) == base + 1
+
+
+def test_reset_owner_with_everything_stopped_leaves_no_owner_row_and_the_next_owner_sees_nothing(tool, monkeypatch, capsys):
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    make_thread()                                                 # one more unlisted thread, as in the review
+    monkeypatch.setattr(account, "other_connections", lambda conn: 0)           # this test process has its own pools open
+    answers(monkeypatch, "OWNER-person", "delete")
+    tool.reset_owner([])
+    printed = capsys.readouterr().out
+    assert "The owner account was deleted" in printed and "transactions" in printed
+    assert "late" not in printed and "student" not in printed                                      # counts only, never a value
+    assert_owner_has_nothing_left()
+    with db.connect_system("test: unclaimed") as conn:
+        row = conn.execute("SELECT username, verifier IS NULL AS u, sweep_state FROM users WHERE id = 1").fetchone()
+    assert dict(row) == {"username": "owner", "u": True, "sweep_state": "deleted"}
+    # the next owner signs up and finds nothing
+    sign_up("new-owner", kind="owner")
+    client = CLIENTS["new-owner"]
+    assert client.get("/api/chat/threads").json() == {"threads": []}
+    assert client.get("/api/charts").json()["items"] == []
+    assert_owner_has_nothing_left()
+    assert mem.list_memories(get_memory().store, "owner") == []
+
+
+@pytest.mark.parametrize("typed", [("someone-else", "delete"), ("owner-person", "yes"), ("owner-person", "")])
+def test_reset_owner_deletes_nothing_unless_the_username_and_the_word_delete_are_typed(tool, monkeypatch, typed):
+    owner = sign_up("owner-person", kind="owner")
+    seed_owner(owner)
+    before, library = tenant_counts(1), library_counts()
+    monkeypatch.setattr(account, "other_connections", lambda conn: 0)
+    answers(monkeypatch, *typed)
+    tool.reset_owner([])
+    assert tenant_counts(1) == before and library_counts() == library
+
+
+def test_reset_owner_refuses_while_a_friend_exists(tool, monkeypatch):
+    owner = sign_up("owner-person", kind="owner")
+    sign_up("friend-person")
+    seed_owner(owner)
+    before = tenant_counts(1)
+    monkeypatch.setattr(account, "other_connections", lambda conn: 0)
+    with pytest.raises(SystemExit) as stop:
+        tool.reset_owner([])
+    assert "Other people still use" in str(stop.value)
+    assert tenant_counts(1) == before
+
+
+def test_the_deleted_mark_is_set_by_reset_and_cleared_by_the_next_claim():
+    owner = sign_up("owner-person", kind="owner")
+    account.reset_owner()
+    with db.connect_system("test: mark") as conn:
+        assert conn.execute("SELECT sweep_state FROM users WHERE id = 1").fetchone()["sweep_state"] == "deleted"
+    sign_up("new-owner", kind="owner")
+    with db.connect_system("test: claimed") as conn:
+        assert conn.execute("SELECT sweep_state FROM users WHERE id = 1").fetchone()["sweep_state"] == "pending"
+    assert owner.uid == 1
