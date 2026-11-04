@@ -11,6 +11,7 @@ from starlette.routing import Route
 
 from ... import account, config, users
 from .. import ask, auth
+from . import charts
 from ..errors import error_response
 from ..inputs import api
 
@@ -21,6 +22,12 @@ def export(request):
     data, name = account.build_export()
     return Response(data, media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
+def _drain() -> None:
+    """Chat turns and chart runs that were still going when the owner deleted the account: stop them and wait a while."""
+    ask.drain_turns(10.0)
+    charts.drain_runs(10.0)
 
 
 @api(body=True)
@@ -35,7 +42,7 @@ def delete(request, data):
     if not isinstance(confirm, str) or not confirm.strip() or len(confirm) > 100:
         return error_response(422, "invalid", "Type your username to confirm.", "confirm_username")
     try:
-        account.delete_account(who.uid, who.username, password, confirm, drain=ask.drain_turns)
+        account.delete_account(who.uid, who.username, password, confirm, drain=_drain)
     except users.AuthError as exc:
         headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
         return error_response(exc.status, exc.code, exc.message, exc.field, headers=headers)

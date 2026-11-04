@@ -188,11 +188,21 @@ def tenant_scope(conn, ctx):
     previous = conn.row_factory
     conn.execute("SELECT set_config('app.user_id', %s, true)", (str(ctx.uid),))
     conn.row_factory = _opening_row_factory(ctx) if config.multiuser() else dict_row
+    failed = False
     try:
         yield conn
+    except BaseException:
+        failed = True
+        raise
     finally:
         conn.row_factory = previous
-        conn.execute("SELECT set_config('app.user_id', '', true)")
+        try:
+            conn.execute("SELECT set_config('app.user_id', '', true)")
+        except psycopg.Error:
+            # When the block failed, the transaction is usually aborted (a deadlock, a constraint) and this statement cannot
+            # run; the rollback clears the setting anyway. Raising here would hide the real error behind InFailedSqlTransaction.
+            if not failed:
+                raise
 
 
 @contextmanager

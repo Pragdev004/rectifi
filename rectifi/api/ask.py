@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import threading
 import uuid
@@ -24,6 +25,8 @@ from .. import config, userctx
 from .errors import ApiError
 from . import wire
 from .wire import to_wire
+
+log = logging.getLogger("rectifi.api.ask")
 
 TICK_SECONDS = 5.0
 TEXT_MAX = 4000
@@ -201,13 +204,13 @@ async def stream_turn(thread_id: str, prepare, work) -> StreamingResponse:
     turn = turn_for(thread_id)
     if not turn.lock.acquire(blocking=False):
         raise ApiError(409, "conflict", "Still answering your last message.")
+    turn.cancelled.clear()                 # BEFORE prepare: a stop that arrives while we prepare (an account delete) must survive
+    turn.partial, turn.partial_id = "", None
     try:
         graph = await run_in_threadpool(prepare)            # may wait on the model's status and the database: not on the event loop
     except BaseException:
         turn.lock.release()
         raise
-    turn.cancelled.clear()
-    turn.partial, turn.partial_id = "", None
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -371,7 +374,8 @@ def delete_chat(thread_id: str) -> bool:
 
 def drain_turns(timeout: float = 15.0) -> None:
     """Stop every running chat turn and wait (up to `timeout` seconds in all) until each has let go of its lock. Used when the
-    owner deletes the account, so no turn writes a checkpoint after the wipe."""
+    owner deletes the account, so no turn writes a checkpoint after the wipe. A turn that does not stop in time is logged (a
+    count only: no id, no text); the next owner claim wipes whatever it writes later (users.confirm_signup)."""
     import time
 
     with _turns_guard:
@@ -379,9 +383,14 @@ def drain_turns(timeout: float = 15.0) -> None:
     for turn in running:
         turn.cancelled.set()
     deadline = time.monotonic() + timeout
+    stuck = 0
     for turn in running:
         if turn.lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
             turn.lock.release()
+        else:
+            stuck += 1
+    if stuck:
+        log.warning("account delete: %d chat turn(s) were still running after %.0f s", stuck, timeout)
 
 
 def request_stop(thread_id: str) -> bool:

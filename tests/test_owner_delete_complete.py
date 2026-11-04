@@ -444,3 +444,84 @@ def test_an_unconfirmed_claim_that_is_rolled_back_keeps_the_deleted_mark():
     users.purge_unconfirmed()
     with db.connect_system("test: look") as conn:
         assert conn.execute("SELECT sweep_state, verifier IS NULL AS u FROM users WHERE id = 1").fetchone() == {"sweep_state": "deleted", "u": True}
+
+
+# ───────────── round 2: drains, the stop flag, the log line, and the real error ─────────────
+
+def test_a_stop_that_arrives_while_a_turn_is_preparing_is_still_there_when_the_work_starts():
+    import asyncio
+
+    from rectifi.api import ask
+
+    key = "22222222-2222-2222-2222-222222222222"
+    seen, done = {}, threading.Event()
+
+    def prepare():
+        ask.drain_turns(timeout=0.1)                   # what the account delete does while this turn prepares (it holds the lock)
+        return object()
+
+    def work(graph, emit, turn):
+        seen["cancelled"] = turn.cancelled.is_set()
+        done.set()
+
+    async def go():
+        await ask.stream_turn(key, prepare, work)
+
+    try:
+        asyncio.run(go())
+        assert done.wait(10)
+        assert seen["cancelled"] is True               # the old code cleared the flag after prepare
+    finally:
+        ask._turns.pop(key, None)                                                     # noqa: SLF001
+
+
+def test_drain_runs_stops_a_running_chart_and_waits_for_it():
+    from rectifi.api.routes import charts
+
+    charts.reset()
+    assert charts._busy.acquire(blocking=False)                                       # noqa: SLF001
+    finished = []
+
+    def run():
+        charts._stop.wait(5)                                                          # noqa: SLF001
+        time.sleep(0.2)
+        finished.append(True)
+        charts._busy.release()                                                        # noqa: SLF001
+
+    threading.Thread(target=run).start()
+    charts.drain_runs(timeout=10)
+    assert finished == [True] and not charts._busy.locked()                           # noqa: SLF001
+    charts.reset()
+
+
+def test_a_drain_that_times_out_is_logged_without_ids_or_text(caplog):
+    import logging
+
+    from rectifi.api import ask
+    from rectifi.api.routes import charts
+
+    key = "33333333-3333-3333-3333-333333333333"
+    turn = ask.turn_for(key)
+    assert turn.lock.acquire(blocking=False)
+    charts.reset()
+    assert charts._busy.acquire(blocking=False)                                       # noqa: SLF001
+    try:
+        with caplog.at_level(logging.WARNING):
+            ask.drain_turns(timeout=0.05)
+            charts.drain_runs(timeout=0.05)
+        lines = [r.getMessage() for r in caplog.records if r.name.startswith("rectifi.api")]
+        assert any("chat turn" in m for m in lines) and any("chart run" in m for m in lines)
+        assert not any(key in m for m in lines)
+    finally:
+        turn.lock.release()
+        ask._turns.pop(key, None)                                                     # noqa: SLF001
+        charts.reset()
+
+
+def test_tenant_scope_lets_the_real_error_through_instead_of_hiding_it_in_a_failed_transaction():
+    import psycopg
+
+    with db.connect_system("test: a failing block") as conn:
+        with pytest.raises(psycopg.errors.DivisionByZero):                            # not InFailedSqlTransaction
+            with db.tenant_scope(conn, userctx.UserContext(uid=1, strict=False)):
+                conn.execute("SELECT 1/0")

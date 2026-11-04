@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import threading
 
@@ -31,6 +32,8 @@ _graph = None
 _graph_key: str | None = None
 _graph_lock = threading.Lock()
 _busy = threading.Lock()
+_stop = threading.Event()            # set by drain_runs (an account delete): the running chart stops at its next step
+log = logging.getLogger("rectifi.api.charts")
 
 
 def reset() -> None:
@@ -38,11 +41,22 @@ def reset() -> None:
     global _graph, _graph_key
     with _graph_lock:
         _graph, _graph_key = None, None
+    _stop.clear()
     if _busy.locked():
         try:
             _busy.release()
         except RuntimeError:
             pass
+
+
+def drain_runs(timeout: float = 15.0) -> None:
+    """Ask a running chart to stop and wait (up to `timeout` seconds) until it has let go of the busy flag. Used when the owner
+    deletes the account. A run that does not stop in time is logged (no id, no text); the next owner claim wipes what it writes."""
+    _stop.set()
+    if _busy.acquire(timeout=timeout):
+        _busy.release()
+    else:
+        log.warning("account delete: a chart run was still going after %.0f s", timeout)
 
 
 def _status() -> dict:
@@ -107,6 +121,7 @@ async def _stream(graph_input, thread_id: str) -> StreamingResponse:
     {"type":"failed", message, trace} or {"type":"error", message}."""
     if not _busy.acquire(blocking=False):
         raise ApiError(409, "conflict", "Still drawing the last chart.")
+    _stop.clear()                                  # before the status and graph checks, so a stop that arrives meanwhile survives
     try:
         status = await run_in_threadpool(_status)
         if not status["ok"]:
@@ -130,6 +145,9 @@ async def _stream(graph_input, thread_id: str) -> StreamingResponse:
         cfg = {"configurable": {"thread_id": thread_id}}
         try:
             for mode, payload in graph.stream(graph_input, cfg, stream_mode=["custom"]):
+                if _stop.is_set():
+                    emit({"type": "error", "message": "Stopped."})
+                    return
                 if mode == "custom":
                     emit({"type": "progress", **{k: payload.get(k) for k in ("step", "verdict", "detail", "attempt")}})
             state = graph.get_state(cfg)
