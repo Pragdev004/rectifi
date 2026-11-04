@@ -13,6 +13,7 @@ Everything built before the multi-user work is in [docs/PROGRESS_HISTORY.md](doc
 
 ## Known gaps (from the final review; login hardening and edge cases, no data exposure)
 
+- Owner delete is terminal-only (`dev.py reset-owner`, Rectifi stopped; the web route answers 403): a chat answer or chart run still running in the server can write a row after a delete, and that cannot be fenced while the app runs. The claim also wipes a row 1 marked 'deleted'.
 - N11: a junk-name flood can push an account's backoff out of the 10,000-entry limiter table, so guesses rise to about 11 per 10,000 junk requests.
 - A stranger's flood fills the 4-slot "other" lane: new browsers, sign-up, the owner claim, change password and new recovery code get 429.
 - A stranger who keeps failing holds NEW browsers of that account at 429 `login_wait`; a known device or the recovery code gets in.
@@ -29,7 +30,7 @@ Everything built before the multi-user work is in [docs/PROGRESS_HISTORY.md](doc
 - The session cookie is `Secure` only in public mode (`RECTIFI_PUBLIC=1`, which the Funnel steps set).
 - The last person's key stays on an idle pooled connection's row factory until the next checkout (memory hygiene only).
 - Friends can call `/api/phone/status` (the server's MagicDNS name and published ports).
-- **Owner account delete leaves the LangGraph chat memories and unlisted thread checkpoints**, so PRIVACY.md's "every row" claim is not true for the owner. Only the operator can issue a new owner invite. Fix this before a server ever changes hands.
+- Only the operator can issue a new owner invite (so an owner delete cannot be undone from the app).
 - N3: the signed-out alerts sweep raises `VaultLocked` on an unsealed custom-merchant name, so the owner's alerts wait for the seal sweep.
 - N5 (suspected): the SMS inbox digest day uses the DB timezone in the re-blind and the process timezone at ingest; a same-day resend after a key change can land in the inbox twice.
 - An SMS with no UPI reference, resent during a blind-key change before that person signs in, can be added twice (nothing lost).

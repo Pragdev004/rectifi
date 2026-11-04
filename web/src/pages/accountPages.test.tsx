@@ -67,10 +67,18 @@ describe("Settings", () => {
     expect(out).toMatch(/cannot be undone, and there is no reset/i);
   });
   it("keeps the delete button off until the username is typed", () => {
-    const out = renderWith(<SettingsPage />, OWNER);
+    const out = renderWith(<SettingsPage />, FRIEND);
     const del = /<button[^>]*>Delete my account for good<\/button>/.exec(out)?.[0] ?? "";
     expect(del).toContain('aria-disabled="true"');
+    expect(out).toContain("(friend)");
+  });
+  it("gives the owner no delete form, only where to do it on the server", () => {
+    const out = renderWith(<SettingsPage />, OWNER);
     expect(out).toContain("(owner)");
+    expect(out).not.toContain("Delete my account for good");
+    expect(out).not.toContain("confirm-username");
+    expect(out).toContain("The owner account can only be deleted on the server: stop Rectifi, then run python scripts/dev.py reset-owner.");
+    expect(out).toMatch(/backup keeps them readable/);
   });
   it("says there are no accounts on a laptop", () => {
     expect(renderWith(<SettingsPage />, LAPTOP)).toContain("There are no accounts on this Rectifi.");

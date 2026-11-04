@@ -25,10 +25,13 @@ def export(request):
 
 @api(body=True)
 def delete(request, data):
-    """Needs the password and the typed username. Deletes every row the person owns and ends their sessions."""
+    """A friend's own delete: needs the password and the typed username, deletes every row they own and ends their sessions.
+    The owner gets 403: the owner account is deleted on the server with `dev.py reset-owner`."""
     who = getattr(request.state, "signed_in", None)
     if who is None:
         return error_response(401, "auth_required", auth.MESSAGES["auth_required"])
+    if who.uid == account.OWNER_UID:                  # before anything is read or checked: nothing is deleted, no password is counted
+        return error_response(403, "owner_delete_on_server", account.OWNER_DELETE_MESSAGE)
     password, confirm = data.get("password"), data.get("confirm_username")
     if not isinstance(password, str) or not password or len(password) > users.MAX_PASSWORD_LENGTH:
         return error_response(422, "invalid", "Type your password.", "password")

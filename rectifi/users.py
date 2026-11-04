@@ -424,6 +424,7 @@ def username_problem(username) -> str | None:
 
 # ───────────────────────── clearing unconfirmed sign-ups ─────────────────────────
 
+DELETED_MARK = "deleted"               # users.sweep_state of row 1 after an owner delete (account._OWNER_RESET): the next claim wipes it
 RESERVED_NAMES = ("owner",)             # row 1's placeholder name: no friend may take it, so resetting row 1 can never clash
 
 
@@ -431,7 +432,7 @@ def _reset_owner_claim(conn) -> None:
     """Row 1 back to 'no password yet' after an owner claim nobody confirmed. The name goes back to 'owner'; if somebody already
     holds that name (a database from before the name was reserved) row 1 gets a unique placeholder instead of an error."""
     sets = ("scrypt_salt = NULL, verifier = NULL, dek_by_password = NULL, dek_by_recovery = NULL, recovery_salt = NULL, "
-            "public_key = NULL, private_key_wrapped = NULL, ingest_salt = NULL, confirmed_at = NULL, sweep_state = NULL, blind_fp = NULL")
+            "public_key = NULL, private_key_wrapped = NULL, ingest_salt = NULL, confirmed_at = NULL, blind_fp = NULL")      # sweep_state stays: it may be DELETED_MARK
     for name in ("owner", f"owner-{secrets.token_hex(4)}"):
         try:
             with conn.transaction():                          # a savepoint: a clash undoes only this try
@@ -626,6 +627,12 @@ def confirm_signup(token: str) -> SignedIn:
             conn.execute("DELETE FROM user_sessions WHERE id = %s", (sid,))
             raise expired
         if uid == OWNER_UID:                                  # same transaction as confirmed_at: both happen or neither does
+            if conn.execute("SELECT sweep_state FROM users WHERE id = %s", (uid,)).fetchone()["sweep_state"] == DELETED_MARK:
+                # the last owner deleted the account: whatever a late request wrote after that is not the new owner's. Without the
+                # mark (a laptop database being claimed for the first time) every row is kept, on purpose.
+                from . import account
+
+                account.wipe_owner_data(conn)
             try:
                 _rekey_owner_dedupe(_context_from(_user_by_id(conn, uid), dek), conn)
             except Exception as exc:                          # noqa: BLE001

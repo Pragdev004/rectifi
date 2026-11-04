@@ -285,6 +285,8 @@ Do this once, in this order. Run every command inside the app container: `rc exe
 
 **There is no password reset.** If a friend forgets their password and loses their recovery code, their text cannot be read again, by them or by you. That is on purpose: it is what keeps you out of their data. Nothing in the repository resets a password for them. They can sign up again with a new invite.
 
+**Deleting the owner account** is done on the server only: stop Rectifi, then run `python scripts/dev.py reset-owner` in a terminal. It refuses while the app, the gateway or any other database connection is open, asks for the owner's username and the word `delete`, and removes every owner row (including the chat memory and all chat threads) in one transaction. Old backups keep the owner's chat and charts readable until they are deleted (up to 7 days).
+
 Friends see only their own pages (no Ask, Charts, Library, Memory or Traces). The owner keeps those. A friend can export or delete their account from Settings.
 
 ## Updates

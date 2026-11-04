@@ -254,25 +254,42 @@ def test_delete_without_a_session_is_refused():
     assert users.login("alice", PASSWORD).status == "ok"
 
 
-def test_the_owner_cannot_delete_row_1_while_friends_exist():
+def test_the_owner_gets_403_from_the_delete_route_and_nothing_is_deleted():
     owner_client, owner = sign_up("owner-person", kind="owner")
     assert owner.uid == 1
+    unseal_guard_off(1)
+    populate(owner)
+    before = {t: row_count(t, 1) for t in db.TENANT_TABLES}
+    r = delete(owner_client, password=PASSWORD, confirm_username="owner-person")
+    assert r.status_code == 403 and r.json()["error"]["code"] == "owner_delete_on_server"
+    assert "dev.py reset-owner" in r.json()["error"]["message"] and "stop Rectifi" in r.json()["error"]["message"]
+    assert {t: row_count(t, 1) for t in db.TENANT_TABLES} == before
+    assert owner_client.get("/api/meta").status_code == 200                       # still signed in
+    with db.connect_system("test: owner still there") as conn:
+        assert conn.execute("SELECT verifier IS NOT NULL AS has FROM users WHERE id = 1").fetchone()["has"] is True
+    # wrong password or wrong typed name: the same 403, before anything is read or counted
+    assert delete(owner_client, password="wrong password", confirm_username="x").status_code == 403
+
+
+def test_the_owner_reset_refuses_while_friends_exist():
+    _, owner = sign_up("owner-person", kind="owner")
     _, friend = sign_up("friend")
     add_ledger(friend, "FFF")
-    r = delete(owner_client, password=PASSWORD, confirm_username="owner-person")
-    assert r.status_code == 409 and r.json()["error"]["code"] == "owner_has_friends"
+    with pytest.raises(users.AuthError) as refused:
+        account.reset_owner()
+    assert refused.value.status == 409 and refused.value.code == "owner_has_friends"
     assert row_count("transactions", friend.uid) == 3
     with db.connect_system("test: owner still there") as conn:
         assert conn.execute("SELECT verifier IS NOT NULL AS has FROM users WHERE id = 1").fetchone()["has"] is True
 
 
-def test_a_lone_owner_can_wipe_everything_and_start_again_with_a_new_owner_invite():
+def test_a_lone_owner_is_wiped_by_the_server_side_reset_and_a_new_owner_invite_works():
     owner_client, owner = sign_up("owner-person", kind="owner")
     unseal_guard_off(1)
     populate(owner)
     assert row_count("transactions", 1) > 0
-    r = delete(owner_client, password=PASSWORD, confirm_username="owner-person")
-    assert r.status_code == 200
+    removed = account.reset_owner()
+    assert removed["transactions"] > 0 and all(isinstance(n, int) for n in removed.values())       # counts only
     kept = {"categories", "merchant_rules", "app_settings"}              # seed_user puts the defaults and its marker back
     assert {t: row_count(t, 1) for t in set(db.TENANT_TABLES) - kept} == {t: 0 for t in set(db.TENANT_TABLES) - kept}
     with as_user(1), db.connect() as conn:
@@ -280,7 +297,7 @@ def test_a_lone_owner_can_wipe_everything_and_start_again_with_a_new_owner_invit
     assert owner_client.get("/api/meta").status_code == 401
     with db.connect_system("test: row 1 is unclaimed") as conn:
         row = conn.execute("SELECT username, verifier, dek_by_password, confirmed_at, encrypted, sweep_state FROM users WHERE id = 1").fetchone()
-    assert dict(row) == {"username": "owner", "verifier": None, "dek_by_password": None, "confirmed_at": None, "encrypted": False, "sweep_state": None}
+    assert dict(row) == {"username": "owner", "verifier": None, "dek_by_password": None, "confirmed_at": None, "encrypted": False, "sweep_state": "deleted"}
     assert users.create_invite("owner")["code"]                                           # the door is open again
     assert row_count("categories", 1) > 5                                                 # the defaults are back
 

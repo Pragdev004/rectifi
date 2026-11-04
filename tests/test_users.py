@@ -249,7 +249,10 @@ def test_no_script_or_route_can_reset_a_password_without_the_password_or_the_rec
     assert offenders == []
     assert not any(re.search(r"(?<![a-z])(reset|admin)", r.path.lower()) for r in api_routes())
     commands = {name for name in load_devtool().COMMANDS}
-    assert not any("reset" in c or "password" in c for c in commands)
+    # `reset-owner` DELETES the owner account and its data (it needs the typed username, a terminal and a stopped app). It cannot
+    # open anything: no key is unwrapped and no password is set. It is the only command with "reset" in its name.
+    assert not any("password" in c for c in commands)
+    assert {c for c in commands if "reset" in c} == {"reset-owner"}
 
 
 def test_only_known_functions_write_the_wrapped_keys_and_each_one_needs_a_secret():

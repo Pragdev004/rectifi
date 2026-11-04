@@ -113,8 +113,23 @@ open your key. This is on purpose: a reset path would be a way in for anyone, in
 
 Settings can download everything you have as a ZIP of CSV files (money as exact text; anything a spreadsheet could run
 as a formula is defused). Settings can also delete your account: it needs your password and your username, and it
-removes every row you own in every table and signs you out everywhere. Old backups keep your encrypted text for up to 7
-days (the backup days on the live page). Amounts and dates in those backups are readable, like any plain data.
+removes every row you own in every table and signs you out everywhere. This is for friends. The owner cannot delete
+the account from the web app (it answers 403).
+
+**How the owner account is deleted.** Only on the server: stop Rectifi, then run `python scripts/dev.py reset-owner`
+in a terminal. It refuses while the app or the phone gateway is running, while any other connection to the database is
+open, and while a friend account exists. You type the owner's username and the word `delete`. Then, in one database
+transaction, it removes every row the owner has in every table: ledger, accounts, budgets, rules, alerts and settings,
+plus the chat's own tables (the things Rectifi was asked to remember and every saved chat thread, also threads
+that no longer show in the chat list), charts, library and traces. The account row itself stays, with its name, password
+and keys cleared, so a new owner can sign up. It ends the owner's sessions and invites and prints row counts only. The reason it is not a button: a chat answer or chart run that is still running in the server could
+write one more row after the delete, and nothing can stop that while the app runs. The next owner's sign-up also
+clears row 1 once more before they see anything.
+
+Old backups keep your data for up to 7 days (the backup days on the live page). Sealed text stays sealed there, but
+amounts and dates are readable, like any plain data. For the owner, the chat, charts, library, traces and memories are
+not sealed in this phase, so a backup keeps them readable for up to 7 days. Rows deleted from the database can also stay
+as dead rows and in the write-ahead log until Postgres vacuums and recycles them.
 
 ## What this does not cover
 

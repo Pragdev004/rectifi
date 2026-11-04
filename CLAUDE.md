@@ -90,7 +90,7 @@ Rectifi is a local-first personal expense tracker. Python 3.13, Postgres 16 (psy
 | `rectifi/vault.py`, `sealed_fields.py`, `merchant_allowlist.py` | Crypto only (seal, blind, keys); the registry of sealed columns; the fixed brand list and `plain_key()`. No DB, no langchain. |
 | `rectifi/users.py`, `api/auth.py`, `api/routes/auth.py` | Invites, two-step sign-up, login, sessions, recovery, per-(account, client) limiter. `SessionLock` binds the person and holds `_FRIEND_RULES`. |
 | `rectifi/account.py`, `seal_sweep.py`, `api/routes/account.py` | Export ZIP, delete, `/api/privacy` facts, the owner-claim sweep (plain to sealed, resumable; `rekey_dedupe` re-keys dedupe columns inside the claim), `rs1` to `rx1` drain, `reblind` after a blind-key change. |
-| `tests/support/tenants.py`, `tests/support/proof.py`, `scripts/devtools/users.py` | Two seeded people with keys (`as_user`, `make_user`); helpers for the proof tests; `migrate-tenancy`, `invite`, `invites`, `revoke-invite`. |
+| `tests/support/tenants.py`, `tests/support/proof.py`, `scripts/devtools/users.py` | Two seeded people with keys (`as_user`, `make_user`); helpers for the proof tests; `migrate-tenancy`, `invite`, `invites`, `revoke-invite`, `reset-owner`. |
 | `scripts/setup_windows.ps1` | One-command Windows setup for a native PostgreSQL (psql, init.sql, .venv, .env, model choice, init, doctor). Plain ASCII, PowerShell 5.1 syntax only. Guarded by `tests/test_setup_windows.py`. |
 | `scripts/seed_demo.py` | Fake data. Only into a database ending in `_demo`. |
 
@@ -105,6 +105,7 @@ python scripts/dev.py eval classify # or charts, rag (add --live for your real m
 python scripts/dev.py set-password  # make RECTIFI_PASSWORD_HASH, RECTIFI_SESSION_SECRET and (if none) RECTIFI_BLIND_KEY for hosting
 python scripts/dev.py deploy-check  # check the hosting files and .env.deploy
 python scripts/dev.py migrate-tenancy  # one-time upgrade of a laptop database to per-person rows; needs a typed yes and a terminal; back up first
+python scripts/dev.py reset-owner   # delete the owner account and all its data; terminal only, Rectifi stopped, asks for the username and `delete` (the web route answers 403)
 python scripts/dev.py invite        # RECTIFI_MULTIUSER=1: one-time sign-up code, shown once (--days N, --owner claims row 1); invites lists, revoke-invite <id> cancels
 python scripts/dev.py test          # or: python -m pytest -q
 python scripts/dev.py up            # db + tables + web app on :8501 (+ phone gateway if RECTIFI_SMS_GATEWAY=1); add --streamlit for the old app

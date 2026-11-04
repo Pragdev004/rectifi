@@ -201,13 +201,13 @@ async def stream_turn(thread_id: str, prepare, work) -> StreamingResponse:
     turn = turn_for(thread_id)
     if not turn.lock.acquire(blocking=False):
         raise ApiError(409, "conflict", "Still answering your last message.")
+    turn.cancelled.clear()                 # BEFORE prepare: a stop that arrives while we prepare (an account delete) must survive
+    turn.partial, turn.partial_id = "", None
     try:
         graph = await run_in_threadpool(prepare)            # may wait on the model's status and the database: not on the event loop
     except BaseException:
         turn.lock.release()
         raise
-    turn.cancelled.clear()
-    turn.partial, turn.partial_id = "", None
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
 

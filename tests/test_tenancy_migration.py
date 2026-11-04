@@ -267,9 +267,9 @@ def test_migrate_tenancy_takes_no_flags_such_as_a_yes_flag():
 
 
 def test_the_users_devtool_has_exactly_these_commands():
-    # The invite commands are real now (WS-AUTH, tested in test_users.py). No reset command may appear.
+    # The invite commands are real now (WS-AUTH, tested in test_users.py). No password-reset command may appear (reset-owner deletes the owner account).
     users = load_users_devtool()
-    assert set(users.COMMANDS) == {"migrate-tenancy", "invite", "invites", "revoke-invite"}
+    assert set(users.COMMANDS) == {"migrate-tenancy", "invite", "invites", "revoke-invite", "reset-owner"}
     for name, (fn, help_text) in users.COMMANDS.items():
         assert callable(fn) and help_text
 
@@ -280,4 +280,4 @@ def test_dev_py_lists_the_users_commands():
     sys.modules[spec.name] = dev
     spec.loader.exec_module(dev)
     assert "users" in dev.DEVTOOL_MODULES
-    assert {"migrate-tenancy", "invite", "invites", "revoke-invite"} <= set(dev.devtool_commands())
+    assert {"migrate-tenancy", "invite", "invites", "revoke-invite", "reset-owner"} <= set(dev.devtool_commands())
