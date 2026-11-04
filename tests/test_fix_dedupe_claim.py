@@ -77,7 +77,7 @@ def test_reimport_and_resent_sms_after_the_claim_add_nothing_and_the_sweep_finis
 def test_without_the_claim_step_the_old_dedupe_misses(monkeypatch):
     """The regression: with the up-front re-key disabled the same statement is added twice (this is what the review found)."""
     account_id, first, when = laptop_history()
-    monkeypatch.setattr(users, "_rekey_owner_dedupe", lambda ctx: None)
+    monkeypatch.setattr(users, "_rekey_owner_dedupe", lambda *a, **k: None)
     signed_in = claim_owner(monkeypatch)
     with userctx.bound(signed_in.ctx):
         again = importer.import_file(CSV, "oct.csv", account_id)
@@ -89,7 +89,7 @@ def test_the_sweep_survives_a_clash_when_the_rekey_never_ran(monkeypatch):
     """A write that landed under the keyed key before the old row was re-keyed: the sweep drops the newer duplicate, counts it,
     and still finishes. Money is not doubled and nothing raises."""
     account_id, first, when = laptop_history()
-    monkeypatch.setattr(users, "_rekey_owner_dedupe", lambda ctx: None)
+    monkeypatch.setattr(users, "_rekey_owner_dedupe", lambda *a, **k: None)
     signed_in = claim_owner(monkeypatch)
     with userctx.bound(signed_in.ctx):
         before = n_txns()
@@ -109,7 +109,7 @@ def test_the_sweep_survives_a_clash_when_the_rekey_never_ran(monkeypatch):
 
 def test_a_clash_keeps_the_category_the_person_chose_on_the_newer_copy(monkeypatch):
     laptop_history()
-    monkeypatch.setattr(users, "_rekey_owner_dedupe", lambda ctx: None)
+    monkeypatch.setattr(users, "_rekey_owner_dedupe", lambda *a, **k: None)
     signed_in = claim_owner(monkeypatch)
     with userctx.bound(signed_in.ctx):
         dup = tools.add_transaction("75", "debit", "2026-10-08", payee="Tea", upi_ref="123456789012", category="Entertainment")
@@ -124,7 +124,7 @@ def test_a_rule_taught_after_the_claim_wins_over_the_old_plain_rule(monkeypatch)
     with as_user(1):
         txn = next(t for t in tools.list_transactions(limit=500) if t["payee"] == "Tea")
         tools.set_category(txn["id"], "Entertainment", remember=True)                # learned rule, plain pattern
-    monkeypatch.setattr(users, "_rekey_owner_dedupe", lambda ctx: None)
+    monkeypatch.setattr(users, "_rekey_owner_dedupe", lambda *a, **k: None)
     signed_in = claim_owner(monkeypatch)
     with userctx.bound(signed_in.ctx):
         tea = next(t for t in tools.list_transactions(limit=500) if t["payee"] == "Tea")

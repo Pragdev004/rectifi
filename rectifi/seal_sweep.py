@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from contextlib import contextmanager
 from typing import Callable
 
 import psycopg
@@ -294,11 +295,23 @@ def _dedupe_where(table: str, spec: sealed_fields.Table) -> str:
 DEDUPE_SEALED = ("upi_ref_sealed", "digest_sealed")          # the plain value behind a hash, kept sealed so the hash can be remade
 
 
-def rekey_dedupe(ctx: userctx.UserContext, *, batch: int = 500) -> dict:
+@contextmanager
+def _scope(conn, ctx):
+    """The caller's connection (one transaction, see `rekey_dedupe`), or a fresh one for this person."""
+    if conn is None:
+        with db.connect() as own:
+            yield own
+    else:
+        with db.tenant_scope(conn, ctx) as shared:
+            yield shared
+
+
+def rekey_dedupe(ctx: userctx.UserContext, *, batch: int = 500, conn=None) -> dict:
     """Make every dedupe key of this person's old rows a keyed hash NOW (HMACs and small seals only, no text work), so a payment
     written before the owner's claim is found by a statement or SMS that arrives after it. Run inside the owner's claim, before
     the first cookie is issued; the slow sealing of text stays with `run`. Safe to run again. A clash drops a duplicate (see `_apply`).
-    Returns {"rekeyed": n, "merged": n}."""
+    With `conn` (the claim's own open transaction) everything runs on that one connection and nothing is committed here, so the
+    re-key and the confirm stand or fall together; any error is raised to the caller. Returns {"rekeyed": n, "merged": n}."""
     if not config.multiuser() or ctx.key is None:
         return {"rekeyed": 0, "merged": 0}
     done = merged = 0
@@ -309,13 +322,13 @@ def rekey_dedupe(ctx: userctx.UserContext, *, batch: int = 500) -> dict:
             allowed = set(spec.blind) | set(DEDUPE_SEALED) | ({"dedupe_key", "scope_key"} if table == "alerts" else set())
             key, after = KEY.get(table, "id"), None
             while True:
-                with db.connect() as conn:
-                    rows = _fetch(conn, table, spec, batch, after, only_dedupe=True)
+                with _scope(conn, ctx) as cx:
+                    rows = _fetch(cx, table, spec, batch, after, only_dedupe=True)
                     changed = 0
                     for row in rows:
                         new = {k: v for k, v in changes(table, spec, row).items() if k in allowed}
                         if new:
-                            did, dropped = _write_row(conn, table, spec, key, row, new)
+                            did, dropped = _write_row(cx, table, spec, key, row, new)
                             changed, merged = changed + did, merged + dropped
                 done += changed
                 if not rows:
@@ -324,8 +337,8 @@ def rekey_dedupe(ctx: userctx.UserContext, *, batch: int = 500) -> dict:
                     after = rows[-1]["id"]
                 elif not changed:
                     break
-        with db.connect() as conn:
-            done += _hide_prefs(conn)
+        with _scope(conn, ctx) as cx:
+            done += _hide_prefs(cx)
     if merged:
         log.warning("re-keying dedupe keys merged %s duplicate rows", merged)
     return {"rekeyed": done, "merged": merged}

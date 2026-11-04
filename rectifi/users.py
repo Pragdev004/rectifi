@@ -81,6 +81,7 @@ MESSAGES = {
     "login_busy": "Rectifi is busy signing people in. Wait a moment and try again.",
     "signup_limited": "Too many sign-up tries. Wait an hour.",
     "username_taken": "That username is taken.",
+    "confirm_failed": "We couldn't finish setting up your account. Nothing was changed. Try again in a moment.",
     "signup_expired": "This sign-up has expired or isn't valid. Start again with your invite code.",
 }
 
@@ -547,17 +548,15 @@ def _open_session_row(conn, uid: int, dek: bytes, now: float) -> SignedIn:
                     ctx=_context_from(row, dek))
 
 
-def _rekey_owner_dedupe(ctx: userctx.UserContext) -> None:
+def _rekey_owner_dedupe(ctx: userctx.UserContext, conn) -> None:
     """The owner's old rows hold plain dedupe keys; every new write holds keyed ones. Make them the same kind NOW, before the
     claim is confirmed and before the first cookie exists, so a statement or SMS that arrives after the claim finds the payments
     that are already here. (Until `confirmed_at` is set the phone gateway gets no ingest salt, so nothing new is written meanwhile.)
-    A failure is logged by type and left to the sweep, which does the same work (and tolerates a clash)."""
+    It runs on the confirm's own connection, so it is ONE transaction with `confirmed_at`: if this raises, the confirm is rolled
+    back with it and the person is told to try again. There is no half-done state, and no 'log it and carry on'."""
     from . import seal_sweep                                   # inside the function: seal_sweep imports account, which imports this module
 
-    try:
-        seal_sweep.rekey_dedupe(ctx)
-    except Exception as exc:                                    # noqa: BLE001
-        log.error("owner claim: re-keying the dedupe keys stopped (%s); the sweep carries on", type(exc).__name__)
+    seal_sweep.rekey_dedupe(ctx, conn=conn)
 
 
 def confirm_signup(token: str) -> SignedIn:
@@ -570,22 +569,34 @@ def confirm_signup(token: str) -> SignedIn:
     sid, k = parsed
     purge_unconfirmed(now)
     with db.connect_system("users: confirm a sign-up") as conn:
-        pending = conn.execute("SELECT user_id, dek_wrapped FROM user_sessions WHERE id = %s AND pending AND expires_at > to_timestamp(%s)",
+        pending = conn.execute("SELECT user_id FROM user_sessions WHERE id = %s AND pending AND expires_at > to_timestamp(%s)",
                                (sid, now)).fetchone()
+        if pending is None:
+            raise expired
+        uid = pending["user_id"]
+        # Lock order, here and in purge_unconfirmed: the person's users row FIRST, then the invite. Whoever holds the row finishes
+        # before the other looks. A purge that got there first has deleted the pending session, so we find it gone and stop with
+        # nothing touched; a confirm that got there first has set confirmed_at, so the purge finds nothing left to reset.
+        locked = conn.execute("SELECT 1 FROM users WHERE id = %s AND confirmed_at IS NULL FOR UPDATE", (uid,)).fetchone()
+        pending = conn.execute("SELECT dek_wrapped FROM user_sessions WHERE id = %s AND pending AND expires_at > to_timestamp(%s) FOR UPDATE",
+                               (sid, now)).fetchone() if locked is not None else None
         if pending is None:
             raise expired
         try:
             dek = vault.unwrap_key(k, bytes(pending["dek_wrapped"]), _label(sid))
         except vault.VaultError:
             raise expired from None
-        uid = pending["user_id"]
         invite = conn.execute("SELECT id FROM invites WHERE reserved_by = %s AND used_at IS NULL AND expires_at > to_timestamp(%s) FOR UPDATE",
                               (uid, now)).fetchone()
         if invite is None:                                    # revoked or expired while waiting
             conn.execute("DELETE FROM user_sessions WHERE id = %s", (sid,))
             raise expired
-        if uid == OWNER_UID:                                  # before confirmed_at is set: until then the phone gateway writes nothing
-            _rekey_owner_dedupe(_context_from(_user_by_id(conn, uid), dek))
+        if uid == OWNER_UID:                                  # same transaction as confirmed_at: both happen or neither does
+            try:
+                _rekey_owner_dedupe(_context_from(_user_by_id(conn, uid), dek), conn)
+            except Exception as exc:                          # noqa: BLE001
+                log.error("owner claim: re-keying the dedupe keys failed (%s); the claim was not confirmed", type(exc).__name__)
+                raise AuthError(500, "confirm_failed", MESSAGES["confirm_failed"]) from None
         conn.execute("UPDATE users SET confirmed_at = to_timestamp(%s), sweep_state = CASE WHEN id = %s THEN 'pending' ELSE sweep_state END, "
                      "blind_fp = %s WHERE id = %s", (now, OWNER_UID, vault.blind_key_fingerprint(), uid))
         conn.execute("UPDATE invites SET used_at = to_timestamp(%s) WHERE id = %s", (now, invite["id"]))
