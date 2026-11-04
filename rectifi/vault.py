@@ -6,8 +6,10 @@ Envelopes (text, safe in a TEXT column):
                                           knows only their PUBLIC key (X25519 + HKDF-SHA256 + AES-256-GCM). Only the
                                           private key, which the data key wraps, can open it. Opened at next sign-in.
   b1:<hex>                                a keyed hash (HMAC-SHA256), for dedupe keys that must not leak text:
-                                          blind() under a key derived from the data key (works only while signed in),
-                                          blind_ingest() under users.ingest_salt (also works signed out).
+                                          blind() under a key derived from the data key (works only while signed in; the data
+                                          key is in no dump, so these hashes cannot be guessed offline),
+                                          blind_ingest() under users.ingest_salt AND the server's RECTIFI_BLIND_KEY (also works
+                                          signed out; the salt is in the database, the key is not, so a dump alone cannot guess them).
 
 Laptop mode (RECTIFI_MULTIUSER unset): seal() and blind() return their input, so nothing changes for one person.
 
@@ -46,6 +48,10 @@ _SCRYPT_SLOTS = threading.BoundedSemaphore(2)       # at most 2 password hashes 
 
 class VaultError(Exception):
     """A value could not be sealed or opened (wrong person, tampered, not an envelope)."""
+
+
+class BlindKeyMissing(VaultError):
+    """RECTIFI_BLIND_KEY is not set (multi-user mode). The app refuses to start without it; this is the second line of defence."""
 
 
 class VaultLocked(VaultError):
@@ -201,15 +207,29 @@ def blind(text: str | None, ctx: userctx.UserContext | None = None) -> str | Non
     return BLIND + digest
 
 
+def _server_blind_key() -> bytes:
+    key = config.blind_key()
+    if key is None:
+        raise BlindKeyMissing("RECTIFI_BLIND_KEY is not set, so keyed hashes cannot be made. Run `python scripts/dev.py set-password`.")
+    return key
+
+
+def blind_key_fingerprint() -> str:
+    """A short fingerprint of the server blind key, stored per person (users.blind_fp) to notice that the key changed. It is an
+    HMAC of a fixed label under the key, cut to 64 bits: it cannot be turned back into the key."""
+    return hmac.new(_server_blind_key(), b"rectifi|blind-key-fingerprint|v1", hashlib.sha256).hexdigest()[:16]
+
+
 def blind_ingest(text: str | None, ctx: userctx.UserContext | None = None) -> str | None:
-    """Like blind(), but under the per-person ingest salt, so the SMS gateway can do it while the person is signed out."""
+    """Like blind(), but it works while the person is signed out (the SMS gateway), so it cannot use the data key. Keyed by the
+    per-person ingest salt (in the database) combined with the server's RECTIFI_BLIND_KEY (not in the database or its backups)."""
     if text is None or not _active():
         return text
     ctx = _ctx(ctx)
     if ctx.ingest_salt is None:
         raise VaultLocked("No ingest salt for this person.")
-    digest = hmac.new(_hkdf(ctx.ingest_salt, _aad("ingest", ctx.uid)), text.encode("utf-8"), hashlib.sha256).hexdigest()
-    return BLIND + digest
+    key = _hkdf(_server_blind_key(), _aad("ingest", ctx.uid), salt=ctx.ingest_salt)
+    return BLIND + hmac.new(key, text.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 # ───────────── keys (used by sign-up, login and recovery; no database here) ─────────────

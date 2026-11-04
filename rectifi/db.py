@@ -181,6 +181,21 @@ def connect():
 
 
 @contextmanager
+def tenant_scope(conn, ctx):
+    """Run a block of one person's work on a connection that is ALREADY open (for example a system connection in the middle of a
+    sign-up), in the same transaction. app.user_id is set for this transaction, sealed cells are opened for `ctx`, and both are
+    put back when the block ends. Nothing is committed here: the caller's transaction decides."""
+    previous = conn.row_factory
+    conn.execute("SELECT set_config('app.user_id', %s, true)", (str(ctx.uid),))
+    conn.row_factory = _opening_row_factory(ctx) if config.multiuser() else dict_row
+    try:
+        yield conn
+    finally:
+        conn.row_factory = previous
+        conn.execute("SELECT set_config('app.user_id', '', true)")
+
+
+@contextmanager
 def connect_system(reason: str):
     """A connection for the few jobs that act on no one person: init_db, sign-up and login (users, invites, sessions), the
     SMS device lookup, the alert ticker listing people. It sees only the people tables and device lookup; tenant tables

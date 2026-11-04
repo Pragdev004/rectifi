@@ -206,7 +206,7 @@ def test_dev_py_starts_the_gateway_and_the_app_on_127_0_0_1(monkeypatch):
     monkeypatch.delenv("RECTIFI_SMS_HOST", raising=False)
     monkeypatch.setattr(dev, "read_env_file", lambda: {})
     assert dev.gateway_host() == "127.0.0.1" and not dev.gateway_is_open()
-    assert dev.gateway_command(8765)[-4:] == ["--host", "127.0.0.1", "--port", "8765"]
+    assert dev.gateway_command(8765)[-5:] == ["--host", "127.0.0.1", "--port", "8765", "--no-proxy-headers"]
     assert dev.LOCAL_ONLY == ["--server.address", "127.0.0.1"]
     monkeypatch.setenv("RECTIFI_SMS_HOST", "0.0.0.0")
     assert dev.gateway_is_open() and "0.0.0.0" in dev.gateway_command(8765)

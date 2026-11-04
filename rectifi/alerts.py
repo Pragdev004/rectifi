@@ -32,9 +32,9 @@ from datetime import date, datetime, time, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from statistics import median
 
-from . import insights, merchants
+from . import config, insights, merchants, userctx, vault
 from .categorize import FALLBACK_EXPENSE
-from .db import connect
+from .db import connect, connect_system
 from .money import fmt_inr, parse_amount
 from .tools import RectifiError
 
@@ -58,7 +58,7 @@ FIXED_CATEGORIES = ("Rent", "EMI & Loans")
 RETRY_MAX = 5                         # a push that fails is tried again this many times, then left in the inbox only
 RETRY_BACKOFF_MINUTES = (1, 5, 15, 60, 180)
 PUSH_TTL_SECONDS = 3600
-SWEEP_LOCK_ID = 7_314_201             # pg_advisory_xact_lock key for sweep
+SWEEP_LOCK_ID = 7_314_201             # pg_advisory_xact_lock(kind, person): one sweep per person at a time, people never wait for each other
 TICK_LOCK_ID = 7_314_202
 
 PERIODS = ("day", "week", "month")
@@ -268,6 +268,20 @@ def _rule_target(scope: str, target: str) -> str:
     raise RectifiError(f"Scope must be one of: {', '.join(SCOPES)}.")
 
 
+def _is_plain(scope: str, target: str) -> bool:
+    """A cap target that may sit in plain text: a group, a category, all spending, or an allow-listed brand (plan D4).
+    The name of any other merchant is the person's own text: it is sealed."""
+    return scope != "merchant" or merchants.is_plain(target)
+
+
+def _name_part(scope: str, target: str) -> str:
+    """The merchant's place in a dedupe key or scope key: the plain name for an allow-listed brand, a keyed hash for a custom
+    merchant. The hash is keyed from the person's data key (`vault.blind`), which no dump or backup holds, so the name cannot be
+    guessed offline; it needs a signed-in person, which a custom merchant needs anyway (its name is sealed, so the signed-out
+    sweep never sees it and the cap fires at the next sign-in). Laptop mode returns the name unchanged."""
+    return target if _is_plain(scope, target) else (vault.blind(target) or target)
+
+
 def _rule_cap(cap) -> Decimal:
     try:
         value = parse_amount(cap)
@@ -289,13 +303,17 @@ def create_rule(scope: str, target: str, period: str, cap) -> dict:
     if period not in PERIODS:
         raise RectifiError(f"Period must be one of: {', '.join(PERIODS)}.")
     target, value = _rule_target(scope, target), _rule_cap(cap)
+    # The database cannot tell a brand from a custom name (that depends on the allow-list), so this is checked here:
+    # a custom merchant's target is sealed and its target_blind is a keyed hash; everything else stays plain.
+    plain = _is_plain(scope, target)
+    stored, blind = (target, target) if plain else (vault.seal(target), vault.blind(target))
     with connect() as conn:
         # Saving the same merchant/period again just changes its cap (and un-mutes it).
         return conn.execute(
-            "INSERT INTO alert_rules (scope, target, period, cap) VALUES (%s, %s, %s, %s) "
+            "INSERT INTO alert_rules (scope, target, target_blind, period, cap) VALUES (%s, %s, %s, %s, %s) "
             "ON CONFLICT (user_id, scope, target_blind, period) DO UPDATE SET cap = EXCLUDED.cap, muted = false, snoozed_until = NULL "
             "RETURNING id, scope, target, period, cap, muted, snoozed_until, created_at",
-            (scope, target, period, value)).fetchone()
+            (scope, stored, blind, period, value)).fetchone()
 
 
 def update_rule(rule_id: int, **changes) -> dict:
@@ -342,17 +360,21 @@ def build_context(today: date | None = None, since: date | None = None, conn=Non
     with _use(conn) as c:
         patterns = merchants.user_patterns(c)
         rows = c.execute(
-            """SELECT t.id, t.txn_date, t.amount, t.direction, t.payee, t.description, t.account_id, t.import_batch_id,
+            """SELECT t.id, t.txn_date, t.amount, t.direction, t.payee, t.description, t.merchant_key, t.account_id, t.import_batch_id,
                       c.name AS category, c.kind AS kind
                FROM transactions t JOIN categories c ON c.id = t.category_id
                WHERE t.txn_date BETWEEN %s AND %s ORDER BY t.txn_date, t.id""", (start, today)).fetchall()
         first = c.execute("SELECT MIN(txn_date) AS d FROM transactions").fetchone()["d"]
         rules = c.execute("SELECT id, scope, target, period, cap, muted, snoozed_until FROM alert_rules ORDER BY id").fetchall()
+        rules = [r for r in rules if r["target"] is not None]       # a custom merchant's cap is sealed: it waits for the next sign-in
         budgets = {r["category"]: r["limit_amount"] for r in c.execute(
             "SELECT c.name AS category, b.limit_amount FROM budgets b JOIN categories c ON c.id = b.category_id WHERE b.month = %s", (m0,)).fetchall()}
         prefs = get_prefs(c)
     for r in rows:
-        found = merchants.match(r["payee"], r["description"], user=patterns)
+        # The text is read when it can be (laptop mode, or signed in). A payment that arrived while its owner was signed out has
+        # a sealed payee, so only its plain merchant_key (an allow-listed brand) says which merchant it was.
+        found = merchants.match(r["payee"], r["description"], user=patterns) if (r["payee"] or r["description"]) else None
+        found = found or merchants.by_key(r["merchant_key"])
         r["merchant"] = found.name if found else None
         r["grp"] = found.group if found else None
     ctx = Context(today=today, m0=m0, rows=rows, first_data=first, rules=rules, budgets=budgets, prefs=prefs, patterns=patterns)
@@ -409,6 +431,7 @@ def spent_in(ctx: Context, cap: Cap) -> Decimal:
 
 def _cap_alert(ctx: Context, cap: Cap, spent: Decimal, threshold: int, txn_id: int | None) -> Alert:
     label = _label(cap.scope, cap.target)
+    part = _name_part(cap.scope, cap.target)
     adj = {"day": "daily", "week": "weekly", "month": "monthly"}[cap.period]
     when = {"day": "today", "week": "this week", "month": "this month"}[cap.period]
     on = {"merchant": f"at {label}", "group": f"on {label}", "category": f"on {label}", "total": "in total"}[cap.scope]
@@ -422,23 +445,28 @@ def _cap_alert(ctx: Context, cap: Cap, spent: Decimal, threshold: int, txn_id: i
     if over > 0 and threshold == 100:
         numbers["over"] = _whole(over)
     start = period_start(cap.period, ctx.today)
+    # What leaves in a push is the category, the amount or an allow-listed brand; a custom merchant's name never does.
+    push_label = label if _is_plain(cap.scope, cap.target) else "A merchant cap"
     return Alert(
         "cap", SEVERITY_FOR[threshold],
         f"{label}: {threshold}% of your {adj} cap",
         f"You have spent {_rs(spent)} of {_rs(cap.cap)} {on} {when}. {tail}",
         numbers,
-        f"cap:{cap.scope}:{cap.target}:{cap.period}:{start.isoformat()}:{threshold}",
-        f"{label}: {threshold}% of {adj} cap",
+        f"cap:{cap.scope}:{part}:{cap.period}:{start.isoformat()}:{threshold}",
+        f"{push_label}: {threshold}% of {adj} cap",
         f"{_rs(spent)} of {_rs(cap.cap)} spent {when}.",
-        rule_id=cap.rule_id, txn_id=txn_id, scope_key=f"{cap.scope}:{cap.target}:{cap.period}", threshold=threshold)
+        rule_id=cap.rule_id, txn_id=txn_id, scope_key=f"{cap.scope}:{part}:{cap.period}", threshold=threshold)
 
 
-def cap_alerts(ctx: Context, new: list[dict] | None = None) -> list[Alert]:
+def cap_alerts(ctx: Context, new: list[dict] | None = None, *, custom_only: bool = False) -> list[Alert]:
     """The highest cap step each cap has reached. With `new` (the sweep's fresh debits) only caps that one of them touches are
     looked at, so an old, untouched cap does not speak up because of an unrelated payment. 49 -> 50 fires 50; 79 -> 81 fires 80;
-    40 -> 85 fires only 80. The dedupe key holds the step, so a step fires once per period."""
+    40 -> 85 fires only 80. The dedupe key holds the step, so a step fires once per period.
+    `custom_only` (the sign-in catch-up) looks only at caps on a merchant that is not an allow-listed brand."""
     found: list[Alert] = []
     for cap in active_caps(ctx):
+        if custom_only and _is_plain(cap.scope, cap.target):
+            continue
         start = period_start(cap.period, ctx.today)
         touching = None
         if new is not None:
@@ -470,14 +498,18 @@ def _still_snoozed(until: str | None) -> bool:
     return moment > _clock()
 
 
-def streak_alerts(ctx: Context, new: list[dict] | None = None) -> list[Alert]:
+def streak_alerts(ctx: Context, new: list[dict] | None = None, *, custom_only: bool = False) -> list[Alert]:
     """'7th Swiggy order this week, ₹2,140 total.' The 5th, 7th and 10th order from one merchant in an ISO week. Only the highest
     tier reached fires."""
     start = week_start(ctx.today)
     names = {r["merchant"] for r in (new if new is not None else ctx.spend) if r["merchant"] and r["txn_date"] >= start}
     found = []
     for name in sorted(names):
-        scope_key = f"streak:{name}"
+        plain = merchants.is_plain(name)
+        if custom_only and plain:
+            continue
+        part = _name_part("merchant", name)
+        scope_key = f"streak:{part}"
         if scope_quiet(ctx.prefs, scope_key):
             continue
         rows = [r for r in ctx.spend if r["merchant"] == name and start <= r["txn_date"] <= start + timedelta(days=6)]
@@ -490,8 +522,9 @@ def streak_alerts(ctx: Context, new: list[dict] | None = None) -> list[Alert]:
             f"{_ordinal(n)} {name} order this week, {_rs(total)} in all",
             f"That is {n} {name} orders since Monday, {_rs(total)} in total. Small orders add up fast.",
             {"order_count": Decimal(n), "week_total": _whole(total)},
-            f"streak:{name}:{start.isoformat()}:{max(tiers)}",
-            f"{_ordinal(n)} {name} order this week", f"{_rs(total)} so far this week.",
+            f"streak:{part}:{start.isoformat()}:{max(tiers)}",
+            f"{_ordinal(n)} {name} order this week" if plain else f"{_ordinal(n)} order from one merchant this week",
+            f"{_rs(total)} so far this week.",
             txn_id=rows[-1]["id"], scope_key=scope_key))
     return found
 
@@ -784,11 +817,14 @@ def _gate(conn, a: Alert, prefs: dict, now: datetime) -> str:
 
 
 def _insert(conn, a: Alert, state: str, now: datetime) -> int | None:
+    """Store one alert. Its title and detail may name a merchant, so they are sealed (signed out: to the person's public key,
+    opened at the next sign-in). push_title and push_body are plain on purpose: they are what can leave signed out, and they
+    hold only a category, an amount or an allow-listed brand."""
     row = conn.execute(
         """INSERT INTO alerts (dedupe_key, kind, severity, title, detail, push_title, push_body, numbers, rule_id, txn_id, scope_key, created_at, push_state)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
            ON CONFLICT (user_id, dedupe_key) DO NOTHING RETURNING id""",
-        (a.dedupe_key, a.kind, a.severity, a.title, a.detail, a.push_title, a.push_body, _numbers_json(a.numbers),
+        (a.dedupe_key, a.kind, a.severity, vault.seal(a.title), vault.seal(a.detail), a.push_title, a.push_body, _numbers_json(a.numbers),
          a.rule_id, a.txn_id, a.scope_key, now, state)).fetchone()
     return row["id"] if row else None
 
@@ -819,10 +855,10 @@ def sweep(origin: str = "tick") -> dict:
     mode 'bulk': more than 5 debits, or any came from an import, or any is dated more than 2 days back. ONE summary alert is
                  pushed; the cap and streak alerts are still written (so the same step never fires again) but not pushed.
     mode 'idle' / 'busy': nothing new / another process is sweeping right now.
-    One Postgres advisory lock makes the gateway process and the web app process take turns; alerts.dedupe_key is UNIQUE, so even
-    a repeat can never write twice."""
+    One Postgres advisory lock per person (kind, uid) makes the gateway process and the web app process take turns for that person
+    only; two people's sweeps never wait for each other. alerts.dedupe_key is UNIQUE per person, so even a repeat can never write twice."""
     with connect() as conn:
-        if not conn.execute("SELECT pg_try_advisory_xact_lock(%s) AS ok", (SWEEP_LOCK_ID,)).fetchone()["ok"]:
+        if not conn.execute("SELECT pg_try_advisory_xact_lock(%s, %s) AS ok", (SWEEP_LOCK_ID, userctx.current().uid)).fetchone()["ok"]:
             return {"new": 0, "mode": "busy"}
         mark = ensure_watermark(conn)
         fresh = conn.execute("SELECT t.id, t.direction, t.txn_date, t.import_batch_id, t.amount, c.kind FROM transactions t "
@@ -860,8 +896,9 @@ def sweep(origin: str = "tick") -> dict:
 
 def _push_all(title: str, body: str, url: str, tag: str | None, urgency: str = "normal", client=None) -> dict:
     """Send one notification to every saved phone. Returns {'devices', 'ok', 'gone', 'retry'}; removes phones that are gone."""
+    uid = userctx.current().uid                     # row level security already limits this to the bound person; the filter says it twice
     with connect() as conn:
-        subs = conn.execute("SELECT id, endpoint, p256dh, auth FROM push_subscriptions ORDER BY id").fetchall()
+        subs = conn.execute("SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = %s ORDER BY id", (uid,)).fetchall()
     result = {"devices": len(subs), "ok": 0, "gone": 0, "retry": 0}
     if not subs:
         return result
@@ -875,11 +912,11 @@ def _push_all(title: str, body: str, url: str, tag: str | None, urgency: str = "
     with connect() as conn:
         for sub_id, verdict in outcome.items():
             if verdict == "gone":
-                conn.execute("DELETE FROM push_subscriptions WHERE id = %s", (sub_id,))
+                conn.execute("DELETE FROM push_subscriptions WHERE id = %s AND user_id = %s", (sub_id, uid))
             elif verdict == "ok":
-                conn.execute("UPDATE push_subscriptions SET last_ok_at = %s, fail_count = 0 WHERE id = %s", (_clock(), sub_id))
+                conn.execute("UPDATE push_subscriptions SET last_ok_at = %s, fail_count = 0 WHERE id = %s AND user_id = %s", (_clock(), sub_id, uid))
             else:
-                conn.execute("UPDATE push_subscriptions SET fail_count = fail_count + 1 WHERE id = %s", (sub_id,))
+                conn.execute("UPDATE push_subscriptions SET fail_count = fail_count + 1 WHERE id = %s AND user_id = %s", (sub_id, uid))
     return result
 
 
@@ -940,9 +977,7 @@ def kick(origin: str) -> threading.Thread | None:
     RECTIFI_NO_ALERT_BACKGROUND=1 turns this and the 60-second ticker off (the test suite sets it)."""
     if os.getenv("RECTIFI_NO_ALERT_BACKGROUND"):
         return None
-    thread = threading.Thread(target=sweep_and_deliver, args=(origin,), name=f"alerts-{origin}", daemon=True)
-    thread.start()
-    return thread
+    return userctx.spawn(sweep_and_deliver, origin, name=f"alerts-{origin}")      # keeps the person who asked
 
 
 # ───────────────────────── the tick ─────────────────────────
@@ -1016,14 +1051,14 @@ def _digest(prefs: dict, now: datetime) -> int:
     return int(written)
 
 
-def tick(client=None) -> dict:
-    """Run every minute by the web app: sweep, release held alerts, the digest, retries. Safe to call from two processes."""
+def _tick_one(client=None) -> dict:
+    """One person's minute: sweep, release held alerts, the digest, retries. Whoever is bound (laptop mode: user 1) is the person."""
     now = _clock()
     prefs = get_prefs()
     out = {"sweep": sweep("tick"), "released": 0, "digest": 0, "retried": 0}
     out["digest"] = _digest(prefs, now)
     with connect() as conn:
-        got = conn.execute("SELECT pg_try_advisory_xact_lock(%s) AS ok", (TICK_LOCK_ID,)).fetchone()["ok"]
+        got = conn.execute("SELECT pg_try_advisory_xact_lock(%s, %s) AS ok", (TICK_LOCK_ID, userctx.current().uid)).fetchone()["ok"]
         if not got:
             return out
         out["retried"] = conn.execute("UPDATE alerts SET push_state = 'pending' WHERE push_state = 'failed' AND push_attempts < %s "
@@ -1031,6 +1066,80 @@ def tick(client=None) -> dict:
     out["released"] = _release_held(prefs, now, client)
     deliver(client)
     return out
+
+
+def people() -> list[userctx.UserContext]:
+    """Everyone the ticker looks after, each with the keys a signed-out job may have: the public key (to seal text) and the
+    ingest salt (for keyed hashes), never the data key. A person with no public key yet (the owner before claiming the
+    account) is left out: nothing can be sealed for them. This is one of the few callers of connect_system."""
+    with connect_system("alerts.tick: list the people to sweep") as conn:
+        rows = conn.execute("SELECT id, public_key, ingest_salt FROM users WHERE public_key IS NOT NULL ORDER BY id").fetchall()
+    return [userctx.UserContext(uid=r["id"], key=None, public_key=bytes(r["public_key"]),
+                                ingest_salt=bytes(r["ingest_salt"]) if r["ingest_salt"] else None, strict=False) for r in rows]
+
+
+def tick(client=None) -> dict:
+    """Run every minute by the web app: sweep, release held alerts, the digest, retries. Safe to call from two processes.
+
+    Laptop mode: the one person, as it always was. Multi-user mode: every person in turn, each bound with no data key, so a
+    signed-out person's alerts still work. One person's failure is logged (its type only) and the next person still runs."""
+    if not config.multiuser():
+        return _tick_one(client)
+    total = {"people": 0, "failed": 0, "sweep": {"new": 0, "mode": "idle"}, "released": 0, "digest": 0, "retried": 0}
+    for who in people():
+        with userctx.bound(who):
+            try:
+                one = _tick_one(client)
+            except Exception as exc:                          # noqa: BLE001
+                log.error("alerts tick failed for one person (%s)", type(exc).__name__)
+                total["failed"] += 1
+                continue
+        total["people"] += 1
+        total["sweep"]["new"] += one["sweep"]["new"]
+        if one["sweep"]["mode"] not in ("idle", "busy"):
+            total["sweep"]["mode"] = one["sweep"]["mode"]
+        for key in ("released", "digest", "retried"):
+            total[key] += one[key]
+    return total
+
+
+# ───────────────────────── sign-in catch-up ─────────────────────────
+
+def catch_up() -> int:
+    """Caps and streaks on a CUSTOM merchant (one that is not an allow-listed brand). While the person was signed out their
+    payee was sealed and their cap's target is sealed, so nothing could match; the sweep moved on. Now the key is here: look at
+    the current day, week and month once, write what has been reached (the dedupe key makes each step fire once) and let the
+    next tick push it. Needs the data key. Returns how many alerts were written."""
+    if userctx.current().key is None:
+        return 0
+    written = 0
+    with connect() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(%s, %s)", (SWEEP_LOCK_ID, userctx.current().uid))      # waits for a sweep that is running now
+        ctx = build_context(conn=conn)
+        found = cap_alerts(ctx, None, custom_only=True) + streak_alerts(ctx, None, custom_only=True)
+        found.sort(key=lambda a: _RANK[a.severity])
+        now = _clock()
+        for a in found:
+            written += _insert(conn, a, _gate(conn, a, ctx.prefs, now), now) is not None
+    return written
+
+
+def reseal_signed_out() -> int:
+    """Alert texts sealed to the public key while the person was signed out ('rs1.') are opened and sealed to the data key
+    ('rx1.'), like every other table. Needs the private key. Safe to run again."""
+    me = userctx.current()
+    if me.key is None or me.private_key is None:
+        return 0
+    with connect() as conn:
+        rows = conn.execute("SELECT id, title, detail FROM alerts WHERE left(title, 4) = 'rs1.' OR left(detail, 4) = 'rs1.'").fetchall()
+        for r in rows:
+            conn.execute("UPDATE alerts SET title = %s, detail = %s WHERE id = %s", (vault.seal(r["title"]), vault.seal(r["detail"]), r["id"]))
+    return len(rows)
+
+
+def after_sign_in() -> dict:
+    """The WS-ALERTS block of hooks.after_sign_in. Never raises into the sign-in (hooks logs the type)."""
+    return {"resealed": reseal_signed_out(), "caught_up": catch_up()}
 
 
 # ───────────────────────── the inbox ─────────────────────────
@@ -1129,7 +1238,7 @@ def add_subscription(endpoint: str, p256dh: str, auth: str, label: str | None = 
         row = conn.execute(
             "INSERT INTO push_subscriptions (endpoint, p256dh, auth, label) VALUES (%s, %s, %s, %s) "
             "ON CONFLICT (user_id, endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, label = COALESCE(EXCLUDED.label, push_subscriptions.label), fail_count = 0 "
-            "RETURNING id", (endpoint, p256dh, auth, label)).fetchone()
+            "RETURNING id", (endpoint, p256dh, auth, vault.seal(label))).fetchone()
     return get_subscription(row["id"])
 
 

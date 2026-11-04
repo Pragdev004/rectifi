@@ -1,0 +1,21 @@
+/* The public Privacy page. It sits on the same slip as sign-in, only wider. Tokens only. */
+.page { display: grid; gap: var(--s-6); min-width: 0; }
+.page section { display: grid; gap: var(--s-3); min-width: 0; }
+.page h2 { font-size: var(--t-lg); line-height: var(--t-lg-lh); font-weight: 500; }
+.page h3 { font-size: var(--t-md); line-height: var(--t-md-lh); font-weight: 600; }
+.lead { font-size: var(--t-md); line-height: var(--t-md-lh); }
+.muted { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); }
+.facts { display: grid; gap: var(--s-2); margin: 0; }
+.facts div { display: grid; gap: 2px; padding: var(--s-2) 0; border-bottom: 1px solid var(--c-rule); }
+.facts dt { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); }
+.facts dd { margin: 0; }
+.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-3); }
+.row { display: grid; gap: var(--s-1); padding: var(--s-3); background: var(--c-sunk); border-radius: var(--r-2); }
+.row p { margin: 0; }
+.label { font-weight: 600; }
+.chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.chips li { padding: 2px var(--s-2); border: 1px solid var(--c-rule); border-radius: var(--r-2); background: var(--c-sunk); min-width: 0; }
+.chips code, .row code { font-family: var(--font-figures); font-size: var(--t-xs); line-height: var(--t-xs-lh); overflow-wrap: anywhere; }
+.chips li.brand code { font-family: inherit; font-size: var(--t-sm); }
+.list { margin: 0; padding-left: 1.2rem; display: grid; gap: var(--s-2); }
+.back { display: inline-flex; align-items: center; min-height: 44px; color: var(--c-accent); }

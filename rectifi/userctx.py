@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextvars
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
 from . import config
@@ -25,12 +25,13 @@ class NoUser(RuntimeError):
 
 @dataclass(frozen=True)
 class UserContext:
+    # repr=False: a context printed by a log line, a traceback or an assertion never shows a key.
     uid: int
-    key: bytes | None = None           # the person's data key, only while they are signed in
+    key: bytes | None = field(default=None, repr=False)          # the person's data key, only while they are signed in
     public_key: bytes | None = None    # X25519 public key: lets a signed-out job seal text only the person can open later
-    ingest_salt: bytes | None = None   # for keyed hashes (dedupe) that must work while signed out
+    ingest_salt: bytes | None = field(default=None, repr=False)  # for keyed hashes (dedupe) that must work while signed out
     strict: bool = True                # True: a sealed value with no key raises VaultLocked. False: it reads as None
-    private_key: bytes | None = None   # X25519 private key, opened with the data key at sign-in (reads "rs1." values)
+    private_key: bytes | None = field(default=None, repr=False)  # X25519 private key, opened with the data key at sign-in
 
 
 LAPTOP = UserContext(uid=OWNER_UID, strict=False)

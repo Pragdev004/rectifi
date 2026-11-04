@@ -11,8 +11,12 @@ The pieces:
                   HttpOnly, SameSite=Strict, Path=/, 7 days, Secure in public mode
   epoch           app_settings.session_epoch. A cookie only works while its epoch matches, so bumping the number signs
                   everyone out at once ("sign out everywhere")
-  login limiter   global (every request reaches us from 127.0.0.1, so there is no IP to count): 5 failures in a minute
+  login limiter   (single password) global (every request reaches us from 127.0.0.1, so there is no IP to count): 5 failures in a minute
                   adds a 2 second pause to each try; 10 failures in 15 minutes locks sign-in for 15 minutes
+
+Multi-user mode (RECTIFI_MULTIUSER=1) is the same cookie with three more fields: uid, sid (a user_sessions row) and k (the
+secret that opens that row's wrapped data key). The checks live in rectifi/users.py; the single password is not used and the
+limiter is per account. See docs/MULTIUSER_PLAN.md section 4.
 
 Nothing here logs or prints a password, a hash or a secret.
 """
@@ -54,6 +58,8 @@ EPOCH_KEY = "session_epoch"
 LOCK_KEY = "login_lock"
 
 MESSAGES = {
+    "signup_off": "Sign-up isn't turned on for this Rectifi.",
+    "not_multiuser": "This Rectifi has one shared password. Change it with `python scripts/dev.py set-password` on the machine it runs on.",
     "auth_required": "Sign in to use Rectifi.",
     "invalid_password": "That password isn't right.",
     "login_locked": "Too many tries. Wait 15 minutes.",
@@ -144,15 +150,25 @@ def session_secret() -> str:
     return os.getenv("RECTIFI_SESSION_SECRET", "").strip()
 
 
+def multiuser() -> bool:
+    return config.multiuser()
+
+
 def login_required() -> bool:
-    """True when /api needs a session: a password is set, or the app is reachable beyond this laptop (public mode)."""
-    return bool(password_hash()) or config.public_mode()
+    """True when /api needs a session: a password is set, the app is reachable beyond this laptop (public mode), or it is
+    multi-user (always: there are accounts)."""
+    return bool(password_hash()) or config.public_mode() or config.multiuser()
 
 
 def startup_problem() -> str | None:
     """Why the login can't work as configured (None when it can, or when it is not needed)."""
     if not login_required():
         return None
+    if config.multiuser():                                  # accounts replace the single password; only the cookie secret is needed
+        if len(session_secret()) < MIN_SECRET_LENGTH:
+            return (f"RECTIFI_SESSION_SECRET is missing or shorter than {MIN_SECRET_LENGTH} characters. "
+                    "Run `python scripts/dev.py set-password`; it makes a new one.")
+        return config.blind_key_problem()
     if parse_hash(password_hash()) is None:
         return ("Rectifi is reachable beyond this laptop (or a password is set) but RECTIFI_PASSWORD_HASH is missing or not "
                 "valid. Run `python scripts/dev.py set-password` and put the two lines it prints into your environment.")
@@ -241,9 +257,116 @@ def new_session_cookie() -> str:
 
 
 def session_valid(cookie_header: str | None) -> bool:
-    """Is this Cookie header a live session? Checks the signature and expiry first (no database), then the epoch."""
+    """Is this Cookie header a live session? Checks the signature and expiry first (no database), then the epoch.
+    Single-password mode only: a multi-user cookie (it has a uid) is never accepted here."""
     data = read_session(cookie_value(cookie_header), session_secret())
-    return data is not None and data["epoch"] == current_epoch()
+    return data is not None and "uid" not in data and data["epoch"] == current_epoch()
+
+
+# ───────────────────────── multi-user cookie ─────────────────────────
+
+def make_user_session(secret: str, signed_in, *, epoch: int | None = None, now: float | None = None, ttl: int = SESSION_SECONDS) -> str:
+    """Cookie for a multi-user session: the usual fields plus uid, sid and k. `signed_in` is a users.SignedIn."""
+    issued = int(_now() if now is None else now)
+    payload = {"iat": issued, "exp": issued + ttl, "epoch": int(signed_in.epoch if epoch is None else epoch),
+               "uid": int(signed_in.uid), "sid": signed_in.sid, "k": _b64e(signed_in.k)}
+    body = _b64e(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+    return f"{body}.{_sign(secret, body)}"
+
+
+def read_user_session(value: str | None, secret: str, *, now: float | None = None) -> dict | None:
+    """Like read_session, but also needs uid (int), sid and k (text). Does not look in the database."""
+    data = read_session(value, secret, now=now)
+    if data is None or type(data.get("uid")) is not int or not isinstance(data.get("sid"), str) or not isinstance(data.get("k"), str):
+        return None
+    return data
+
+
+def resolve_user(cookie_header: str | None):
+    """The users.SignedIn behind this Cookie header, or None for anything wrong: tampered, expired, deleted session, wrong
+    epoch, another person's uid. Blocking (a database read): call it from a thread."""
+    from .. import users
+    from .inputs import ensure_db
+
+    data = read_user_session(cookie_value(cookie_header), session_secret())
+    if data is None:
+        return None
+    ensure_db()
+    return users.open_session(data["uid"], data["sid"], data["k"], data["epoch"])
+
+
+# ───────────────────────── known-device cookie ─────────────────────────
+# A browser that signed in to an account once keeps a signed id for it. The sign-in limiter counts that browser on its own, so a
+# stranger who shares its network address (everyone arrives through the same proxy) cannot use up its tries. The cookie is not a
+# credential: it opens nothing, and a thief who has it still needs the password.
+
+DEVICE_COOKIE = "rectifi_device"
+DEVICE_SECONDS = 180 * 24 * 3600
+
+
+def make_device_cookie(secret: str, uid: int, device_id: str | None = None) -> tuple[str, str]:
+    """(cookie value, device id). Pass the id of an existing valid cookie to keep it; otherwise a fresh random one is made."""
+    device_id = device_id or secrets.token_hex(8)
+    body = _b64e(json.dumps({"uid": int(uid), "d": device_id}, separators=(",", ":"), sort_keys=True).encode())
+    return f"{body}.{_sign(secret, 'device.' + body)}", device_id
+
+
+def read_device_cookie(value: str | None, secret: str) -> tuple[int, str] | None:
+    """(uid, device id) of a cookie whose signature is right, else None."""
+    if not value or not secret or value.count(".") != 1 or len(value) > 300:
+        return None
+    body, signature = value.split(".")
+    try:
+        if not hmac.compare_digest(signature.encode("ascii"), _sign(secret, "device." + body).encode("ascii")):
+            return None
+        data = json.loads(_b64d(body))
+    except (ValueError, UnicodeError, binascii.Error):
+        return None
+    if not isinstance(data, dict) or type(data.get("uid")) is not int or not isinstance(data.get("d"), str) or not 4 <= len(data["d"]) <= 64:
+        return None
+    return data["uid"], data["d"]
+
+
+# ───────────────────────── who is the client ─────────────────────────
+
+def _as_ip(text: str):
+    import ipaddress
+
+    try:
+        ip = ipaddress.ip_address(text.strip().strip("[]"))
+    except ValueError:
+        return None
+    return ip.ipv4_mapped if getattr(ip, "ipv4_mapped", None) else ip
+
+
+def _limiter_key(ip) -> str:
+    """The text the limiter counts. An IPv6 client is counted by its /64 (one person usually has a whole /64 to hand out)."""
+    import ipaddress
+
+    if ip.version == 6:
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False).network_address)
+    return str(ip)
+
+
+def client_address(peer: str | None, forwarded_for: str | None, trusted: tuple) -> str:
+    """The address the sign-in limiter should count for one request.
+
+    `peer` is the socket's address. A forwarded header (X-Forwarded-For) is believed ONLY when the peer is one of the `trusted`
+    proxies (RECTIFI_TRUSTED_PROXIES; empty by default, so the header is ignored). Even then the list is read from the right:
+    each hop that is itself a trusted proxy is skipped, and the first address that is not one is the client. Anything a client
+    wrote at the left of the list is never reached. A header that is not an address is ignored (the peer is used)."""
+    peer_ip = _as_ip(peer or "")
+    if peer_ip is None:
+        return peer or ""
+    if not trusted or not any(peer_ip in net for net in trusted if net.version == peer_ip.version):
+        return _limiter_key(peer_ip)
+    for hop in reversed((forwarded_for or "").split(",")):
+        ip = _as_ip(hop)
+        if ip is None:
+            break
+        if not any(ip in net for net in trusted if net.version == ip.version):
+            return _limiter_key(ip)
+    return _limiter_key(peer_ip)
 
 
 # ───────────────────────── login limiter ─────────────────────────

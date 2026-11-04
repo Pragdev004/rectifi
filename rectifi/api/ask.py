@@ -20,7 +20,7 @@ import uuid
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import StreamingResponse
 
-from .. import config
+from .. import config, userctx
 from .errors import ApiError
 from . import wire
 from .wire import to_wire
@@ -228,7 +228,7 @@ async def stream_turn(thread_id: str, prepare, work) -> StreamingResponse:
             turn.lock.release()
             emit(None)
 
-    threading.Thread(target=worker, name="rectifi-ask", daemon=True).start()
+    userctx.spawn(worker, name="rectifi-ask")          # keeps the signed-in person (and their key) in the worker thread
 
     async def lines():
         while True:

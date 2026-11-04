@@ -31,5 +31,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD ["python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8501/api/health',timeout=3)"]
 
 # One worker on purpose: uploads waiting for a column check and the Ask locks live in memory.
-# No --proxy-headers: we do not trust X-Forwarded-* from anyone.
-CMD ["python", "-m", "uvicorn", "--factory", "rectifi.api.app:create_app", "--host", "0.0.0.0", "--port", "8501", "--workers", "1"]
+# --no-proxy-headers: uvicorn must not rewrite the client address from X-Forwarded-* (only RECTIFI_TRUSTED_PROXIES may, in our code).
+CMD ["python", "-m", "uvicorn", "--factory", "rectifi.api.app:create_app", "--host", "0.0.0.0", "--port", "8501", "--workers", "1", "--no-proxy-headers"]

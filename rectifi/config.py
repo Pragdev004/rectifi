@@ -186,6 +186,24 @@ def bind_host() -> str:
     return value
 
 
+def trusted_proxies() -> tuple:
+    """RECTIFI_TRUSTED_PROXIES: comma-separated addresses or networks (127.0.0.1, 172.16.0.0/12, ::1) of reverse proxies whose
+    X-Forwarded-For header may be believed. Default: empty, so a forwarded header is ignored and the peer address is the client.
+    A word that is not an address or network is skipped (nothing is trusted because of a typo)."""
+    import ipaddress
+
+    out = []
+    for part in _env("RECTIFI_TRUSTED_PROXIES").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            continue
+    return tuple(out)
+
+
 def public_mode() -> bool:
     """True when the app is reachable from beyond this laptop: RECTIFI_PUBLIC=1, or a bind host that is not loopback.
     Public mode needs its own login (RECTIFI_PASSWORD_HASH and RECTIFI_SESSION_SECRET)."""
@@ -198,6 +216,25 @@ def multiuser() -> bool:
     """True when RECTIFI_MULTIUSER=1: invite sign-up, one account per person, text stored encrypted. Off by default
     (laptop mode: one person, user 1, today's behaviour). Streamlit and the MCP server refuse to run when it is on."""
     return _flag("RECTIFI_MULTIUSER")
+
+
+MIN_BLIND_KEY_LENGTH = 32
+
+
+def blind_key() -> bytes | None:
+    """RECTIFI_BLIND_KEY: a server secret that lives only in .env / .env.deploy, never in the database or its backups. It is mixed
+    into the keyed hashes of SMS and UPI references (vault.blind_ingest), so a stolen dump alone cannot be used to guess them.
+    None when it is missing or too short."""
+    value = os.getenv("RECTIFI_BLIND_KEY", "").strip()
+    return value.encode("utf-8") if len(value) >= MIN_BLIND_KEY_LENGTH else None
+
+
+def blind_key_problem() -> str | None:
+    """Why multi-user mode cannot start for lack of the blind key (None when it is fine, or not needed)."""
+    if not multiuser() or blind_key() is not None:
+        return None
+    return (f"RECTIFI_BLIND_KEY is missing or shorter than {MIN_BLIND_KEY_LENGTH} characters. It is a server secret kept in .env, "
+            "never in the database. Run `python scripts/dev.py set-password`; it makes one. Back it up apart from the database backups.")
 
 
 def web_search() -> bool:

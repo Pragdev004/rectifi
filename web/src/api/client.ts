@@ -60,7 +60,8 @@ async function toError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, "error", "Something went wrong. Try again.");
 }
 
-export async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+/** One round trip. Same headers, same error shape for every call; the caller reads the body it wants (JSON, or a file). */
+async function send(method: string, path: string, options: RequestOptions = {}): Promise<Response> {
   const headers: Record<string, string> = { [REQUEST_HEADER]: "1", Accept: "application/json" };
   let body: BodyInit | undefined;
   if (options.form) {
@@ -86,7 +87,17 @@ export async function request<T>(method: string, path: string, options: RequestO
     if (err.code === "auth_required") window.dispatchEvent(new Event("rectifi:auth-required")); // api/auth.ts sends the person to /login
     throw err;
   }
-  return (await res.json()) as T;
+  return res;
+}
+
+export async function request<T>(method: string, path: string, options: RequestOptions = {}): Promise<T> {
+  return (await send(method, path, options)).json() as Promise<T>;
+}
+
+/** A file the server sends back (the account export ZIP), with the file name it suggests. */
+export async function requestBlob(path: string, signal?: AbortSignal): Promise<{ blob: Blob; filename: string | null }> {
+  const res = await send("GET", path, { signal });
+  return { blob: await res.blob(), filename: /filename="?([^";]+)"?/i.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? null };
 }
 
 export const get = <T,>(path: string, signal?: AbortSignal) => request<T>("GET", path, { signal });
@@ -94,6 +105,8 @@ export const post = <T,>(path: string, body?: unknown) => request<T>("POST", pat
 export const put = <T,>(path: string, body?: unknown) => request<T>("PUT", path, { body });
 export const patch = <T,>(path: string, body?: unknown) => request<T>("PATCH", path, { body });
 export const del = <T,>(path: string) => request<T>("DELETE", path);
+/** DELETE with a JSON body (deleting an account needs the password and the typed username). */
+export const delWith = <T,>(path: string, body: unknown) => request<T>("DELETE", path, { body });
 
 /** Query-string helper that leaves out empty values. */
 export function qs(params: Record<string, string | number | null | undefined>): string {

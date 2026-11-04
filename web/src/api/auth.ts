@@ -1,11 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { navigate } from "wouter/use-browser-location";
 import { ApiError, NetworkError, get, post } from "./client";
+import { useSecretCall } from "./secret";
 
-/** What the server says about sign-in. On a laptop with no password, `required` is false and nothing is ever shown. */
+/** What the server says about sign-in. On a laptop with no password, `required` is false and nothing is ever shown.
+ *  `multiuser`, `username` and `is_owner` are for the screens only (which pages to show); the server still decides what a person may reach. */
 export interface AuthStatus {
   required: boolean;
   signed_in: boolean;
+  multiuser: boolean;
+  username: string | null;
+  is_owner: boolean;
+}
+
+/** The owner-only pages. A friend never sees these in the menus; the server answers 403 for them anyway. */
+export const OWNER_ONLY_PATHS = ["/ask", "/charts", "/library", "/memory", "/traces"] as const;
+
+/** True for the owner, for a laptop, and while the answer is not in yet (a short flash of links is better than a blank menu).
+ *  False only when the server said: this is a friend. */
+export function isOwnerView(status: AuthStatus | undefined): boolean {
+  if (!status) return true;
+  return !status.multiuser || status.is_owner;
+}
+
+/** Account settings only mean something when people have accounts (multi-user mode) and you are signed in. */
+export function hasAccount(status: AuthStatus | undefined): boolean {
+  return Boolean(status?.multiuser && status.signed_in);
 }
 
 export const authKeys = { status: ["auth", "status"] as const };
@@ -30,13 +50,27 @@ export function signInProblem(error: unknown): { locked: boolean; message: strin
   return { locked: false, message: "Something went wrong. Try again." };
 }
 
-/** The password is sent once, in the request body, and is not kept anywhere (not in state outside the form, not in the query cache). */
+/** Is the signed-in person the owner? Use this to skip a request a friend would only get a 403 for. */
+export function useIsOwner(): boolean {
+  const status = useAuthStatus();
+  return isOwnerView(status.data);
+}
+
+export interface Credentials {
+  password: string;
+  /** Multi-user mode only. A laptop or a shared password sends the password alone. */
+  username?: string;
+}
+
+/** The password is sent once, in the request body, and is not kept anywhere (not in the query cache: this is not a TanStack mutation). */
 export function useSignIn() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (password: string) => post<{ ok: true }>("/auth/login", { password }),
-    onSuccess: () => qc.clear(), // everything fetched before sign-in was a 401; start clean
+  const call = useSecretCall(async ({ username, password }: Credentials) => {
+    const out = await post<{ ok: true }>("/auth/login", username === undefined ? { password } : { username, password });
+    qc.clear(); // everything fetched before sign-in was a 401; start clean
+    return out;
   });
+  return { run: call.run, pending: call.pending, error: call.error, reset: call.reset };
 }
 
 function useLeave(path: "/auth/logout" | "/auth/logout-all") {

@@ -22,7 +22,7 @@ from decimal import Decimal
 
 import pandas as pd
 
-from . import categorize
+from . import categorize, merchant_allowlist, userctx, vault
 from .db import connect
 from .money import parse_amount
 from .parsing import narration_details
@@ -469,10 +469,11 @@ def import_rows(rows: list[StatementRow], account: str | int, filename: str | No
         result.account_id, result.account_name = account_id, named["name"] if named else None
         batch_id = conn.execute(
             "INSERT INTO import_batches (account_id, filename) VALUES (%s, %s) RETURNING id",
-            (account_id, (filename or "")[:200] or None),
+            (account_id, vault.seal((filename or "")[:200] or None)),
         ).fetchone()["id"]
         result.batch_id = batch_id
         occurrences: dict[str, int] = {}
+        ctx_uid = userctx.current().uid
         ctx = categorize.load_context(conn)          # rules, accounts and the look-alike index, loaded once for every row
         for row in rows:
             payee, upi_ref = narration_details(row.narration)
@@ -480,11 +481,15 @@ def import_rows(rows: list[StatementRow], account: str | int, filename: str | No
                 upi_ref = upi_ref or row.ref
             first_print = _fingerprint(account_id, row)
             occurrences[first_print] = occurrences.get(first_print, 0) + 1
-            fingerprint = _fingerprint(account_id, row, occurrences[first_print])
+            # Dedupe keys are keyed hashes (laptop mode: the plain values, exactly as before). The plain reference is kept
+            # only sealed. rule 3: the unique indexes (user_id, upi_ref, direction) and (user_id, fingerprint) are the real guard.
+            fingerprint = vault.blind(_fingerprint(account_id, row, occurrences[first_print]))
+            upi_key = vault.blind_ingest(upi_ref)
+            brand = merchant_allowlist.plain_key(payee, row.narration)
 
             if upi_ref:
                 existing = conn.execute(
-                    "SELECT id, account_id FROM transactions WHERE upi_ref = %s AND direction = %s", (upi_ref, row.direction)
+                    "SELECT id, account_id FROM transactions WHERE upi_ref = %s AND direction = %s", (upi_key, row.direction)
                 ).fetchone()
                 if existing:
                     if existing["account_id"] is None:
@@ -496,7 +501,7 @@ def import_rows(rows: list[StatementRow], account: str | int, filename: str | No
                 continue
 
             match = conn.execute(
-                """SELECT id FROM transactions
+                """SELECT id, payee FROM transactions
                    WHERE amount = %s AND direction = %s
                      AND txn_date BETWEEN %s AND %s
                      AND upi_ref IS NULL AND fingerprint IS NULL
@@ -508,10 +513,12 @@ def import_rows(rows: list[StatementRow], account: str | int, filename: str | No
             ).fetchone()
             if match:
                 conn.execute(
-                    """UPDATE transactions SET account_id = %s, upi_ref = %s, fingerprint = %s,
-                              description = COALESCE(description, %s), txn_date = %s
+                    """UPDATE transactions SET account_id = %s, upi_ref = %s, upi_ref_sealed = %s, fingerprint = %s,
+                              description = COALESCE(description, %s), txn_date = %s,
+                              merchant_key = COALESCE(merchant_key, %s)
                        WHERE id = %s""",
-                    (account_id, upi_ref, fingerprint, row.narration, row.txn_date, match["id"]),
+                    (account_id, upi_key, vault.seal(upi_ref), fingerprint, vault.seal(row.narration), row.txn_date,
+                     brand or merchant_allowlist.plain_key(match["payee"], row.narration), match["id"]),
                 )
                 result.merged += 1
                 continue
@@ -519,16 +526,18 @@ def import_rows(rows: list[StatementRow], account: str | int, filename: str | No
             category_id, why = _categorize_detail(conn, payee, row.narration, row.direction, ctx)
             suggested_id = _suggestion_id(conn, why)
             # Rows the fixed layers could not place stay in the catch-all and wait ('pending') for the optional model pass.
+            # That pass is the owner's only (plan D7): a friend's rows are never sent to a model, so they are never 'pending'.
+            wait_for_model = why.source == "fallback" and ctx_uid == userctx.OWNER_UID
             conn.execute(
                 """INSERT INTO transactions (account_id, amount, direction, txn_date, payee, description,
-                                             upi_ref, fingerprint, category_id, source, raw_text, import_batch_id,
+                                             upi_ref, upi_ref_sealed, fingerprint, category_id, source, raw_text, import_batch_id,
                                              category_source, category_confidence, category_reason,
-                                             suggested_category_id, suggested_confidence, classify_state)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'statement', %s, %s, %s, %s, %s, %s, %s, %s)""",
-                (account_id, row.amount, row.direction, row.txn_date, payee, row.narration,
-                 upi_ref, fingerprint, category_id, f"line {row.line}: {row.narration}", batch_id,
-                 why.source, why.confidence, why.reason, suggested_id, why.suggested_confidence if suggested_id else None,
-                 "pending" if why.source == "fallback" else None),
+                                             suggested_category_id, suggested_confidence, classify_state, merchant_key)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'statement', %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (account_id, row.amount, row.direction, row.txn_date, vault.seal(payee), vault.seal(row.narration),
+                 upi_key, vault.seal(upi_ref), fingerprint, category_id, vault.seal(f"line {row.line}: {row.narration}"), batch_id,
+                 why.source, why.confidence, vault.seal(why.reason), suggested_id, why.suggested_confidence if suggested_id else None,
+                 "pending" if wait_for_model else None, brand),
             )
             result.added += 1
 

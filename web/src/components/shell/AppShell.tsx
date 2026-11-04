@@ -1,8 +1,8 @@
-import { BookText, Ellipsis, House, LogOut, MessageSquare, Plus, WifiOff } from "lucide-react";
+import { BellRing, BookText, Ellipsis, House, LogOut, MessageSquare, Plus, WifiOff } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { useSignOut, useAuthStatus } from "../../api/auth";
+import { useSignOut, useAuthStatus, useIsOwner } from "../../api/auth";
 import { useChatStatus } from "../../api/chat";
 import { useOffline } from "../../api/client";
 import { cx } from "../../lib/cx";
@@ -10,7 +10,7 @@ import { setTheme, useTheme, type ThemeChoice } from "../../lib/theme";
 import { Dialog } from "../Dialog";
 import { Button, LinkButton, SegmentedControl } from "../forms";
 import { Eyebrow } from "../ui";
-import { isActive, MORE_ITEMS, NAV_GROUPS, PAGE_NAMES, type NavItem } from "./nav";
+import { isActive, MORE_ITEMS, PAGE_NAMES, visibleGroups, visibleItems, type NavItem } from "./nav";
 import { UnreadChip } from "./UnreadChip";
 import styles from "./shell.module.css";
 
@@ -54,7 +54,8 @@ function NavLink({ item, path }: { item: NavItem; path: string }) {
 }
 
 function Sidebar({ path }: { path: string }) {
-  const model = useChatStatus();
+  const model = useChatStatus(); // for a friend this is switched off: the model is the owner's only
+  const auth = useAuthStatus();
   const modelLine = model.data ? (model.data.ok ? `Model: ${model.data.model}` : "Assistant is off") : "";
   return (
     <aside className={styles.sidebar}>
@@ -66,7 +67,7 @@ function Sidebar({ path }: { path: string }) {
         Add entry
       </LinkButton>
       <nav className={styles.nav} aria-label="Main">
-        {NAV_GROUPS.map((g) => (
+        {visibleGroups(auth.data).map((g) => (
           <div key={g.title} className={styles.group}>
             <Eyebrow as="h2">{g.title}</Eyebrow>
             <ul>
@@ -98,8 +99,13 @@ function TopBar({ path, setSlot }: { path: string; setSlot: (el: HTMLElement | n
   );
 }
 
+/** What the More sheet lists for this person. */
+const useMoreItems = (): NavItem[] => visibleItems(MORE_ITEMS, useAuthStatus().data);
+
 function BottomNav({ path, onMore }: { path: string; onMore: () => void }) {
-  const inMore = MORE_ITEMS.some((i) => isActive(path, i));
+  const owner = useIsOwner();
+  const more = useMoreItems();
+  const inMore = more.some((i) => isActive(path, i));
   const cur = (on: boolean) => (on ? ("page" as const) : undefined);
   return (
     <nav className={styles.bottomnav} aria-label="Main">
@@ -122,10 +128,17 @@ function BottomNav({ path, onMore }: { path: string; onMore: () => void }) {
           </Link>
         </li>
         <li>
-          <Link href="/ask" className={styles.tab} aria-current={cur(path === "/ask")}>
-            <MessageSquare size={22} strokeWidth={1.5} aria-hidden="true" />
-            <span>Ask</span>
-          </Link>
+          {owner ? (
+            <Link href="/ask" className={styles.tab} aria-current={cur(path === "/ask")}>
+              <MessageSquare size={22} strokeWidth={1.5} aria-hidden="true" />
+              <span>Ask</span>
+            </Link>
+          ) : (
+            <Link href="/alerts" className={styles.tab} aria-current={cur(path === "/alerts")}>
+              <BellRing size={22} strokeWidth={1.5} aria-hidden="true" />
+              <span>Alerts</span>
+            </Link>
+          )}
         </li>
         <li>
           <button type="button" className={styles.tab} onClick={onMore} aria-haspopup="dialog" aria-current={cur(inMore)}>
@@ -139,11 +152,12 @@ function BottomNav({ path, onMore }: { path: string; onMore: () => void }) {
 }
 
 function MoreSheet({ open, onClose, path }: { open: boolean; onClose: () => void; path: string }) {
+  const items = useMoreItems();
   return (
     <Dialog open={open} onClose={onClose} title="More" sheet>
       <nav aria-label="More pages">
         <ul className={styles.moreList}>
-          {MORE_ITEMS.map((item) => (
+          {items.map((item) => (
             <li key={item.to}>
               <Link href={item.to} className={styles.link} aria-current={isActive(path, item) ? "page" : undefined} onClick={onClose}>
                 <item.icon size={20} strokeWidth={1.5} aria-hidden="true" />

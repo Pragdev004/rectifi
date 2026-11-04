@@ -191,9 +191,10 @@ NODE_MIN = (20, 19)               # Vite 7's floor
 
 def api_command(port: str, reload: bool = False) -> list[str]:
     """The web app's server: uvicorn on rectifi.api.app:create_app, this laptop only. A list, never a shell string.
-    One worker on purpose: pending uploads and Ask locks live in memory."""
+    One worker on purpose: pending uploads and Ask locks live in memory. --no-proxy-headers: uvicorn must not rewrite the client
+    address from X-Forwarded-For (it does that by default for a peer on 127.0.0.1); only RECTIFI_TRUSTED_PROXIES may."""
     command = [project_python(), "-m", "uvicorn", "--factory", "rectifi.api.app:create_app",
-               "--host", DEFAULT_GATEWAY_HOST, "--port", port, "--log-level", "warning"]
+               "--host", DEFAULT_GATEWAY_HOST, "--port", port, "--log-level", "warning", "--no-proxy-headers"]
     if reload:
         command += ["--reload", "--reload-dir", "rectifi"]
     return command
@@ -260,7 +261,7 @@ def gateway_is_open() -> bool:
 def gateway_command(port: int) -> list[str]:
     """The command that runs the gateway: uvicorn on rectifi.sms_gateway:create_app. A list, never a shell string."""
     return [project_python(), "-m", "uvicorn", "--factory", "rectifi.sms_gateway:create_app",
-            "--host", gateway_host(), "--port", str(port)]
+            "--host", gateway_host(), "--port", str(port), "--no-proxy-headers"]
 
 
 def gateway_listening(port: int) -> bool:
@@ -710,6 +711,13 @@ def cmd_doctor(_args) -> None:
         r.ok(".env found")
     else:
         r.warn(".env not found (defaults are used)", "Copy .env.example to .env if you want to change settings.")
+
+    if setting("RECTIFI_MULTIUSER").strip().lower() in ("1", "true", "yes", "on"):
+        if len(setting("RECTIFI_BLIND_KEY").strip()) >= 32:
+            r.ok("RECTIFI_BLIND_KEY is set (several-people mode)")
+        else:
+            r.fail("RECTIFI_BLIND_KEY is missing or shorter than 32 characters (several-people mode needs it; Rectifi will not start without it)",
+                   "Run `python scripts/dev.py set-password`; it makes one. Keep a copy apart from the database backups.")
 
     url = database_url()
     code, _ = _quiet([py, "-c", CHECK_DB])

@@ -39,7 +39,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from . import alerts, config, tools
+from . import alerts, config, tools, userctx
 from .db import DatabaseUnavailable, TenancyMigrationNeeded, UnsafeDatabaseRole, init_db
 
 log = logging.getLogger("rectifi.sms_gateway")
@@ -47,7 +47,7 @@ log = logging.getLogger("rectifi.sms_gateway")
 MAX_BODY = 8 * 1024
 RATE_LIMIT = 60                   # SMS per device per minute
 RATE_WINDOW = 60.0
-FAILED_AUTH_LIMIT = 30            # wrong tokens per client address per minute
+FAILED_AUTH_LIMIT = 30            # wrong tokens per client address per minute; throttles the answer to a wrong token only, never a good one
 DB_ERRORS = (DatabaseUnavailable, psycopg.OperationalError, PoolTimeout)
 
 TEXT_KEYS = ("text", "message", "body")
@@ -160,6 +160,19 @@ async def _read_body(request: Request) -> bytes | None:
     return bytes(body)
 
 
+def _ingest_as(device: dict, sender, text, sent_at) -> dict:
+    """Write one SMS as the person who owns this device (and nobody else): the device's own context is bound for every
+    database call here. It has no data key, so texts are sealed to the person's public key and read again at sign-in."""
+    with userctx.bound(device["ctx"]):
+        return tools.ingest_sms(device["id"], sender, text, sent_at)
+
+
+def _sweep_as(device: dict) -> None:
+    """The alerts sweep after a new payment, for that same person."""
+    with userctx.bound(device["ctx"]):
+        alerts.sweep_and_deliver("sms")
+
+
 def create_app() -> Starlette:
     device_limit = RateLimiter(RATE_LIMIT)
     failures = RateLimiter(FAILED_AUTH_LIMIT)
@@ -169,14 +182,16 @@ def create_app() -> Starlette:
 
     async def sms(request: Request) -> JSONResponse:
         client = request.client.host if request.client else "?"
-        if failures.full(client):
-            return _reply(429, {"error": "too many wrong tokens, wait a minute"}, {"Retry-After": "60"})
         token = bearer_token(request)
         try:
             device = await run_in_threadpool(tools.authenticate_device, token) if token else None
         except DB_ERRORS:
             return _reply(503, {"error": "database not reachable"}, {"Retry-After": "30"})
         if device is None:
+            # Only a WRONG token is ever throttled, and never before the token is checked: behind Funnel or the Docker port every
+            # request comes from the same address, so a stranger's bad tokens must not be able to refuse a phone that has a good one.
+            if failures.full(client):
+                return _reply(429, {"error": "too many wrong tokens, wait a minute"}, {"Retry-After": "60"})
             failures.add(client)
             return _reply(401, {"error": "unauthorized"}, {"WWW-Authenticate": "Bearer"})
         if not device_limit.allow(device["id"]):
@@ -189,7 +204,7 @@ def create_app() -> Starlette:
         except ValueError as exc:
             return _reply(422, {"error": str(exc)})
         try:
-            result = await run_in_threadpool(tools.ingest_sms, device["id"], sender, text, sent_at)
+            result = await run_in_threadpool(_ingest_as, device, sender, text, sent_at)
         except DB_ERRORS:
             return _reply(503, {"error": "database not reachable"}, {"Retry-After": "30"})
         except Exception as exc:                       # never put the SMS or the token in a log line
@@ -197,20 +212,27 @@ def create_app() -> Starlette:
             return _reply(500, {"error": "internal error"})
         reply = _reply(200, {"status": result["status"]})
         if result["status"] == "added":                # a new payment: look for alerts after the phone has its answer
-            reply.background = BackgroundTask(alerts.sweep_and_deliver, "sms")
+            reply.background = BackgroundTask(_sweep_as, device)
         return reply
 
     @asynccontextmanager
     async def lifespan(app):
+        if config.blind_key_problem():                  # multi-user mode cannot make its keyed hashes without the server's blind key
+            log.error("%s", config.blind_key_problem())
+            raise RuntimeError(config.blind_key_problem())
         try:
             await run_in_threadpool(init_db)
-            await run_in_threadpool(alerts.ensure_watermark)
+            if not config.multiuser():          # one person: set the alerts baseline now. Several people: each gets theirs at their first sweep
+                await run_in_threadpool(alerts.ensure_watermark)
         except (TenancyMigrationNeeded, UnsafeDatabaseRole) as exc:
             log.error("%s", exc)                    # the gateway does not start; the message says what to do
             raise
         except DB_ERRORS:
             log.warning("The database is not reachable yet. /sms answers 503 (the phone retries) until it is.")
-        if config.sms_host_is_open():
+        if config.public_mode() and config.sms_host_is_open():
+            log.warning("Rectifi phone gateway is on for the server: it listens inside its container and the host publishes it on "
+                        "127.0.0.1 only (Funnel). Every SMS needs a device token.")
+        elif config.sms_host_is_open():
             log.warning("Rectifi phone gateway is listening on %s, so anyone on your network with a device token can send "
                         "SMS to it. Prefer RECTIFI_SMS_HOST=127.0.0.1 and `python scripts/dev.py tailscale`.", config.sms_host())
         else:
@@ -305,7 +327,8 @@ def main() -> None:
     """`python -m rectifi.sms_gateway`. `dev.py phone` runs uvicorn on the same factory."""
     import uvicorn
 
-    uvicorn.run(create_app(), host=config.sms_host(), port=config.sms_port(), log_level="info")
+    # proxy_headers=False: uvicorn's default would believe X-Forwarded-For from 127.0.0.1 and rewrite the client address.
+    uvicorn.run(create_app(), host=config.sms_host(), port=config.sms_port(), log_level="info", proxy_headers=False)
 
 
 if __name__ == "__main__":

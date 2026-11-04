@@ -15,6 +15,14 @@ from contextlib import contextmanager
 from rectifi import db, userctx, vault
 
 
+def _current_blind_fp() -> str | None:
+    """What a real sign-up stores in users.blind_fp; None when a test has removed the server key."""
+    try:
+        return vault.blind_key_fingerprint()
+    except Exception:  # noqa: BLE001 (no key configured: the row looks like one made before the key existed)
+        return None
+
+
 def make_user(username: str | None = None, *, uid: int | None = None, encrypted: bool = False) -> userctx.UserContext:
     """The person with this id (created when it does not exist), seeded with default categories and rules, with fresh keys."""
     public, private = vault.new_keypair()
@@ -23,8 +31,8 @@ def make_user(username: str | None = None, *, uid: int | None = None, encrypted:
         if uid is None or conn.execute("SELECT 1 FROM users WHERE id = %s", (uid,)).fetchone() is None:
             row = conn.execute("INSERT INTO users (username) VALUES (%s) RETURNING id", (username or f"user{uid or ''}",)).fetchone()
             uid = row["id"]
-        conn.execute("UPDATE users SET public_key = %s, ingest_salt = %s, encrypted = %s, confirmed_at = now() WHERE id = %s",
-                     (public, ingest, encrypted, uid))
+        conn.execute("UPDATE users SET public_key = %s, ingest_salt = %s, encrypted = %s, confirmed_at = now(), blind_fp = %s "
+                     "WHERE id = %s", (public, ingest, encrypted, _current_blind_fp(), uid))
     db.seed_user(uid)
     return userctx.UserContext(uid=uid, key=vault.new_data_key(), public_key=public, ingest_salt=ingest, strict=True, private_key=private)
 

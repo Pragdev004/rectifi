@@ -1,0 +1,5 @@
+.gate { display: grid; gap: var(--s-4); min-width: 0; }
+.warn { display: grid; gap: var(--s-2); }
+.code code { font-family: var(--font-figures); font-size: var(--t-lg); line-height: var(--t-lg-lh); letter-spacing: 0.04em; }
+.actions { display: grid; gap: var(--s-3); }
+.state { color: var(--c-muted); font-size: var(--t-sm); line-height: var(--t-sm-lh); }

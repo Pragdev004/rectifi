@@ -233,22 +233,80 @@ class BodyLimit:
 
 # ═══ WS-HOST: begin ═══
 # SessionLock (the login for public mode), the chart-frame CSP route and any other new guard go here. WS-HOST only.
+# WS-AUTH also works inside this block: multi-user sessions, binding the person, and the FRIEND_ROUTES gate (D7).
+import re  # noqa: E402
+
 from starlette.concurrency import run_in_threadpool  # noqa: E402
 from starlette.middleware import Middleware  # noqa: E402
 
+from .. import config as _config  # noqa: E402
+from .. import userctx as _userctx  # noqa: E402
 from . import auth as _auth  # noqa: E402
 from .errors import DB_DOWN_HINT, DB_ERRORS  # noqa: E402
 
-# Open without a session: the health check, and the three calls the login page itself makes. Everything else under /api
-# (including /api/auth/logout-all) needs a session. Static files and the page shell hold no data and stay public.
-SESSION_EXEMPT = frozenset({"/api/health", "/api/auth/status", "/api/auth/login", "/api/auth/logout"})
+# Open without a session: the health check, the calls the login and sign-up pages make, and the public facts page.
+# Everything else under /api (including /api/auth/logout-all) needs a session. Static files and the page shell hold no
+# data and stay public.
+SESSION_EXEMPT = frozenset({"/api/health", "/api/auth/status", "/api/auth/login", "/api/auth/logout", "/api/auth/signup",
+                            "/api/auth/signup/confirm", "/api/auth/recover", "/api/privacy"})
+
+# ── D7: AI is owner-only, deny by default ──
+# In multi-user mode a friend (any account but the owner) reaches ONLY the routes below. Everything else under /api, including
+# a route somebody adds later, answers 403 until a line is added here on purpose. Each entry: (methods, path pattern). A
+# pattern is a full match; {id} stands for one path segment. The owner reaches everything.
+_FRIEND_RULES = (
+    # sign-in pages and your own account (the routes check the password or code themselves)
+    ("GET POST", "/api/auth/{id}"), ("POST", "/api/auth/signup/confirm"),
+    ("GET POST DELETE", "/api/account"), ("GET", "/api/account/{id}"), ("GET", "/api/privacy"),
+    # what every page needs to start, the home page, the weekly review, insights (no "explain": that calls a model)
+    ("GET", "/api/meta"), ("GET", "/api/overview"), ("GET", "/api/review"), ("PUT", "/api/review/commitment"),
+    ("GET", "/api/insights"), ("POST", "/api/insights/apply"),
+    # the ledger, adding by hand or by pasting an SMS, and the phone inbox
+    ("GET POST", "/api/transactions"), ("PATCH DELETE", "/api/transactions/{id}"), ("POST", "/api/transactions/{id}/apply-similar"),
+    ("POST", "/api/sms/preview"), ("POST", "/api/sms/save"), ("GET", "/api/inbox/{id}/prefill"),
+    # statement imports (the model sorting job /api/classify/* is not here)
+    ("POST", "/api/imports"), ("POST", "/api/imports/preview"), ("POST", "/api/imports/commit"), ("GET", "/api/imports/{id}"),
+    ("POST", "/api/imports/{id}/undo"), ("GET", "/api/imports/{id}/rows"),
+    # budgets, accounts, the phone SMS gateway pairing
+    ("GET PUT", "/api/budgets"), ("POST", "/api/budgets/copy"), ("GET POST", "/api/accounts"), ("POST", "/api/accounts/{id}/balances"),
+    ("GET", "/api/phone/status"), ("GET POST", "/api/phone/devices"), ("POST", "/api/phone/devices/{id}/revoke"),
+    ("POST", "/api/phone/test"), ("GET", "/api/phone/inbox"), ("POST", "/api/phone/inbox/{id}/dismiss"),
+    # alerts, leaks, merchant patterns, phone push (no "explain": that calls a model)
+    ("GET", "/api/alerts"), ("GET", "/api/alerts/today"), ("POST", "/api/alerts/read-all"), ("GET", "/api/alerts/presets"),
+    ("GET PUT", "/api/alerts/prefs"), ("GET POST", "/api/alerts/rules"), ("PATCH DELETE", "/api/alerts/rules/{id}"),
+    ("POST", "/api/alerts/{id}/read"), ("POST", "/api/alerts/{id}/mute"), ("POST", "/api/alerts/{id}/snooze"),
+    ("GET", "/api/leaks"), ("GET POST", "/api/merchants/patterns"), ("DELETE", "/api/merchants/patterns/{id}"),
+    ("GET", "/api/push/key"), ("GET POST", "/api/push/subscriptions"), ("DELETE", "/api/push/subscriptions/{id}"), ("POST", "/api/push/test"),
+)
+
+
+def _compile_rules() -> tuple:
+    out = []
+    for methods, pattern in _FRIEND_RULES:
+        regex = re.escape(pattern).replace(re.escape("{id}"), r"[^/]+")
+        out.append((frozenset(methods.split()), re.compile("^" + regex + "$")))
+    return tuple(out)
+
+
+FRIEND_ROUTES = _compile_rules()
+
+
+def friend_allowed(method: str, path: str) -> bool:
+    """May a friend (not the owner) call this? Only what _FRIEND_RULES names. Anything else, including a route added later, is no."""
+    method = method.upper()
+    return any(method in methods and pattern.match(path) for methods, pattern in FRIEND_ROUTES)
 
 
 class SessionLock:
-    """When a password is set (or the app is public), /api needs a valid rectifi_session cookie, else 401 auth_required.
+    """When a password is set (or the app is public, or multi-user), /api needs a valid rectifi_session cookie, else 401.
 
     Sits right after HostGuard and before ApiGuard. OPTIONS passes through so ApiGuard can answer 403 as always. If the
-    login is switched on but not set up, every guarded call is refused (503): it fails closed, never open."""
+    login is switched on but not set up, every guarded call is refused (503): it fails closed, never open.
+
+    Multi-user mode adds three things for each guarded call: the cookie is checked against the database (the session row,
+    the epoch, the secret that opens the data key); the person is bound with userctx.bound() for the rest of the request, so
+    every database call is theirs; and a friend gets 403 for anything not in FRIEND_ROUTES. request.state.uid is the real
+    integer id there. In laptop and single-password mode it stays "owner" and nothing is bound (user 1)."""
 
     def __init__(self, app) -> None:
         self.app = app
@@ -263,8 +321,14 @@ class SessionLock:
         if _auth.startup_problem():
             response = JSONResponse(error_body("auth_misconfigured", _auth.MESSAGES["auth_misconfigured"]), status_code=503)
             return await response(scope, receive, send)
+        cookie = Headers(scope=scope).get("cookie")
         try:
-            ok = await run_in_threadpool(_auth.session_valid, Headers(scope=scope).get("cookie"))
+            if _config.multiuser():
+                who = await run_in_threadpool(_auth.resolve_user, cookie)
+                ok = who is not None
+            else:
+                who = None
+                ok = await run_in_threadpool(_auth.session_valid, cookie)
         except DB_ERRORS:
             response = JSONResponse(error_body("db_unavailable", f"Rectifi can't reach its database. {DB_DOWN_HINT}"),
                                     status_code=503, headers={"Retry-After": "10"})
@@ -272,13 +336,34 @@ class SessionLock:
         if not ok:
             response = JSONResponse(error_body("auth_required", _auth.MESSAGES["auth_required"]), status_code=401)
             return await response(scope, receive, send)
-        await self.app(scope, receive, send)
+        if who is None:
+            return await self.app(scope, receive, send)
+        if not who.is_owner and not friend_allowed(scope["method"], path):
+            return await _forbidden("This part of Rectifi is only for the person who runs it.")(scope, receive, send)
+        scope["state"].update(uid=who.uid, username=who.username, signed_in=who)
+        with _userctx.bound(who.ctx):
+            await self.app(scope, receive, send)
+
+
+def _assert_safe_role() -> None:
+    """D11: multi-user or public mode refuses to run as a superuser or BYPASSRLS database role (it would skip row level
+    security without a sound). If the database is down right now there is nothing to check; init_db checks again at start-up."""
+    from .. import db
+
+    if not (_config.multiuser() or _config.public_mode()):
+        return
+    try:
+        db.assert_app_role(strict=True)
+    except DB_ERRORS:
+        pass
 
 
 def install_session_lock(app) -> None:
     """Call once in create_app, right after the Starlette object is built. Refuses to start (StartupRefused) when the app is
-    public, or a password hash is set, without a usable hash and session secret. Then adds SessionLock after HostGuard."""
+    public, multi-user, or a password hash is set, without a usable login setup, and (UnsafeDatabaseRole) when multi-user or
+    public mode would run as a superuser role. Then adds SessionLock after HostGuard."""
     _auth.check_startup()
+    _assert_safe_role()
     if any(m.cls is SessionLock for m in app.user_middleware):
         return                                          # already installed (safe to call twice)
     if app.middleware_stack is not None:

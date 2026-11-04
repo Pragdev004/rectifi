@@ -1,6 +1,6 @@
 """The web app's server: /api (JSON) and the built browser app (web/dist), on one port.
 
-    python -m uvicorn --factory rectifi.api.app:create_app --host 127.0.0.1 --port 8501
+    python -m uvicorn --factory rectifi.api.app:create_app --host 127.0.0.1 --port 8501 --no-proxy-headers
 
 Run exactly one worker: the pending uploads, the recent-imports list and the Ask locks live in memory.
 """
@@ -57,6 +57,9 @@ def api_routes() -> list[Route]:
                    classify, charts, chat, memory, traces, models, auth, knowledge, alerts_routes):
         found += module.routes
     # ═══ WS-ACCOUNT: begin ═══   (account export and delete, /api/privacy)
+    from .routes import account as account_routes
+
+    found += account_routes.routes
     # ═══ WS-ACCOUNT: end ═══
     return found
 
@@ -83,7 +86,10 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
         return FileResponse(index, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
     def _start_background_work() -> None:
-        """Only when the database is up: finish sorting jobs a restart cut short, and refresh the library index (a thread; one worker)."""
+        """Only when the database is up: finish sorting jobs a restart cut short, and refresh the library index (a thread; one worker).
+        Several people: nobody is bound here, so the owner's sign-in hook (hooks.ai_after_sign_in) does both instead."""
+        if config.multiuser():
+            return
         try:
             from ..agent import jobs                            # lazy: rectifi.api must import without langchain
 
@@ -132,10 +138,11 @@ def create_app(dist_dir: str | Path | None = None) -> Starlette:
             if not os.getenv("RECTIFI_NO_ALERT_BACKGROUND"):
                 from .. import alerts
 
-                try:
-                    await run_in_threadpool(alerts.ensure_watermark)       # what is already here is history, not news
-                except DB_ERRORS:
-                    pass
+                if not config.multiuser():      # one person: set the baseline now. Several people: nobody is bound here, so each
+                    try:                         # person gets theirs lazily at their first sweep (alerts.sweep -> ensure_watermark)
+                        await run_in_threadpool(alerts.ensure_watermark)       # what is already here is history, not news
+                    except DB_ERRORS:
+                        pass
                 ticker = asyncio.create_task(alert_ticker())
             # ═══ WS-ALERTS: end ═══
         try:

@@ -91,9 +91,7 @@ def test_a_new_person_is_seeded_with_their_own_categories_and_rules():
 
 # Files under rectifi/ that still start a bare thread. Each workstream removes its own entries when it moves to userctx.spawn
 # (WS-AI: ask.py, routes/charts.py, routes/knowledge.py, agent/jobs.py; WS-ALERTS: alerts.py). The list may only shrink.
-KNOWN_BARE_THREADS = {
-    "rectifi/agent/jobs.py", "rectifi/alerts.py", "rectifi/api/ask.py", "rectifi/api/routes/charts.py", "rectifi/api/routes/knowledge.py",
-}
+KNOWN_BARE_THREADS: set[str] = set()
 
 
 def test_no_new_bare_threads_under_rectifi():
@@ -105,3 +103,13 @@ def test_no_new_bare_threads_under_rectifi():
         if re.search(r"\bthreading\.Thread\(|\bThread\(|\bTimer\(", path.read_text(encoding="utf-8")):
             found.add(rel)
     assert found <= KNOWN_BARE_THREADS, f"Start threads with userctx.spawn, not threading.Thread: {sorted(found - KNOWN_BARE_THREADS)}"
+
+
+def test_the_keys_never_show_in_repr_or_str():
+    """A context printed by a log line, a traceback or an assertion must not carry the data key, private key or ingest salt."""
+    key, private, salt = b"K" * 32, b"P" * 32, b"S" * 16
+    ctx = userctx.UserContext(uid=7, key=key, public_key=b"Q" * 32, ingest_salt=salt, private_key=private)
+    for text in (repr(ctx), str(ctx), f"{ctx!r}"):
+        assert "uid=7" in text
+        for secret in (key, private, salt):
+            assert repr(secret) not in text and secret.hex() not in text

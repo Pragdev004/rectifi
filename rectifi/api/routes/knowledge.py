@@ -21,7 +21,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ... import config, tools
+from ... import config, tools, userctx
 from .. import wire
 from ..errors import ApiError
 from ..inputs import api, ensure_db, path_int
@@ -65,7 +65,10 @@ def _run_job(corpora: tuple[str, ...]) -> None:
 
 
 def start_reindex(corpora: tuple[str, ...] = ("guide", "note", "upload", "txn")) -> bool:
-    """Start the background re-index. False if one is already running."""
+    """Start the background re-index. False if one is already running (or, in multi-user mode, nobody is bound: the index
+    belongs to a person, so the start-up call does nothing and the owner's sign-in hook starts it)."""
+    if config.multiuser() and not userctx.is_bound():
+        return False
     with _lock:
         if _job["state"] == "running":
             return False
@@ -78,7 +81,7 @@ def start_reindex(corpora: tuple[str, ...] = ("guide", "note", "upload", "txn"))
         total = 0
     with _lock:
         _job["total"] = total
-    threading.Thread(target=_run_job, args=(corpora,), name="rag-reindex", daemon=True).start()
+    userctx.spawn(_run_job, corpora, name="rag-reindex")       # keeps the person who started it
     return True
 
 

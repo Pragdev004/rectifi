@@ -197,8 +197,9 @@ def test_phone_command_builds_the_uvicorn_arguments_as_a_list(monkeypatch):
     monkeypatch.setattr(dev_module, "read_env_file", lambda: {})                # the default, whatever is in your .env
     monkeypatch.delenv("RECTIFI_SMS_HOST", raising=False)
     assert dev_module.gateway_command(8765) == [
-        "PY", "-m", "uvicorn", "--factory", "rectifi.sms_gateway:create_app", "--host", "127.0.0.1", "--port", "8765"]
-    assert dev_module.gateway_command(9000)[-2:] == ["--port", "9000"]
+        "PY", "-m", "uvicorn", "--factory", "rectifi.sms_gateway:create_app", "--host", "127.0.0.1", "--port", "8765",
+        "--no-proxy-headers"]
+    assert dev_module.gateway_command(9000)[-3:] == ["--port", "9000", "--no-proxy-headers"]
 
 
 def test_phone_command_uses_the_port_from_the_environment(monkeypatch):
@@ -212,7 +213,8 @@ def test_phone_command_uses_the_port_from_the_environment(monkeypatch):
     with pytest.raises(SystemExit) as stop:
         dev_module.cmd_phone(None)
     assert stop.value.code == 0
-    assert calls == [["PY", "-m", "uvicorn", "--factory", "rectifi.sms_gateway:create_app", "--host", "127.0.0.1", "--port", "9123"]]
+    assert calls == [["PY", "-m", "uvicorn", "--factory", "rectifi.sms_gateway:create_app", "--host", "127.0.0.1", "--port", "9123",
+                     "--no-proxy-headers"]]
 
 
 @pytest.mark.parametrize("value, port", [("", 8765), ("9000", 9000), ("abc", 8765), ("0", 8765), ("70000", 8765), (" 8800 ", 8800)])
@@ -365,7 +367,7 @@ def test_app_runs_the_web_server_on_localhost_8501(monkeypatch, tmp_path):
     dev_module.cmd_app(None)
     (command, env), = calls
     assert command[1:] == ["-m", "uvicorn", "--factory", "rectifi.api.app:create_app", "--host", "127.0.0.1",
-                           "--port", "8501", "--log-level", "warning"]
+                           "--port", "8501", "--log-level", "warning", "--no-proxy-headers"]
     assert "--workers" not in command and "0.0.0.0" not in command
     assert env == {"RECTIFI_ALLOWED_ORIGINS": "https://laptop.tail1.ts.net"}
 
